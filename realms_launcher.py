@@ -11,6 +11,7 @@ from PIL import Image, ImageTk
 import winreg
 import re
 from tkhtmlview import HTMLLabel
+import shutil  # Import shutil for removing directories
 
 # Constants
 MOD_INFO_URL = "https://storage.googleapis.com/realms-in-exile/updater/version.json"
@@ -285,15 +286,31 @@ class ModLauncher(tk.Tk):
         return "0.0.0"
 
     def uninstall_mod(self):
-        """Uninstalls the mod."""
+        """Uninstalls the mod and removes all folders and subfolders."""
         folder = self.install_folder.get()
-        if messagebox.askyesno("Confirm Uninstall", "Do you really want to uninstall the mod?"):
-            for root, dirs, files in os.walk(folder, topdown=False):
-                for file in files:
-                    os.remove(os.path.join(root, file))
-            self.status_label.config(text="Mod uninstalled successfully.", fg="green")
-            self.save_folder(folder, installed=False)
-            self.check_for_mod_updates()
+        if not folder or not os.path.exists(folder):
+            messagebox.showerror("Error", "No valid installation folder selected.")
+            return
+
+        if messagebox.askyesno("Confirm Uninstall", "Do you really want to uninstall the mod? This will delete all files and folders in the selected directory."):
+            try:
+                # Use shutil.rmtree to delete the folder and all its contents
+                shutil.rmtree(folder)
+
+                # Reset UI and clear registry
+                self.status_label.config(text="Mod uninstalled successfully. All files and folders were removed.", fg="green")
+                self.folder_label.config(text="Installation Folder: Not selected")
+                self.install_folder.set("")
+                self.save_folder("", installed=False)
+
+                # Update UI elements
+                self.hide_download_button()
+                self.uninstall_button.pack_forget()
+                self.folder_button.pack()
+
+            except Exception as e:
+                self.status_label.config(text=f"Error uninstalling mod: {e}", fg="red")
+                print(f"Error during uninstallation: {e}")
 
 if __name__ == "__main__":
     app = ModLauncher()
