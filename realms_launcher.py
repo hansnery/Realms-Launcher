@@ -96,6 +96,12 @@ class ModLauncher(tk.Tk):
         self.progress.pack(pady=5)
         self.progress.pack_forget()
 
+        # Folder Path Display
+        self.folder_label = tk.Label(
+            self, text="Installation Folder: Not selected", font=("Arial", 10), anchor="w", justify="left"
+        )
+        self.folder_label.pack(fill="x", side="bottom", padx=10, pady=5)
+
     def fetch_news(self):
         """Fetches the news content."""
         try:
@@ -117,6 +123,7 @@ class ModLauncher(tk.Tk):
                 if installed:  # Mod installed
                     self.install_folder.set(folder)
                     self.is_installed = True
+                    self.folder_label.config(text=f"Installation Folder: {folder}")
                     self.check_for_mod_updates()
                 else:  # Folder exists, but mod not installed
                     self.reset_folder()
@@ -130,6 +137,7 @@ class ModLauncher(tk.Tk):
         self.install_folder.set("")
         self.is_installed = False
         self.status_label.config(text="No folder saved. Please select an installation folder.", fg="red")
+        self.folder_label.config(text="Installation Folder: Not selected")  # Reset the label
         self.hide_download_button()
         self.uninstall_button.pack_forget()
 
@@ -138,6 +146,7 @@ class ModLauncher(tk.Tk):
         folder = filedialog.askdirectory()
         if folder:
             self.install_folder.set(folder)
+            self.folder_label.config(text=f"Installation Folder: {folder}")  # Update the label
             self.save_folder(folder, installed=False)
             self.status_label.config(text="Checking mod status...", fg="blue")
             self.check_for_mod_updates()
