@@ -20,6 +20,40 @@ NEWS_URL = "https://raw.githubusercontent.com/hansnery/Realms-Launcher/refs/head
 LAUNCHER_VERSION = "1.0.0"
 REG_PATH = r"SOFTWARE\REALMS_Launcher"
 
+class Tooltip:
+    """A simple tooltip class for Tkinter widgets."""
+    def __init__(self, widget, text=""):
+        self.widget = widget
+        self.text = text
+        self.tooltip_window = None
+        self.widget.bind("<Enter>", self.show_tooltip)
+        self.widget.bind("<Leave>", self.hide_tooltip)
+
+    def show_tooltip(self, event):
+        """Display the tooltip near the widget."""
+        x = event.x_root + 10
+        y = event.y_root + 10
+
+        self.tooltip_window = tk.Toplevel(self.widget)
+        self.tooltip_window.wm_overrideredirect(True)  # Remove window decorations
+        self.tooltip_window.wm_geometry(f"+{x}+{y}")
+
+        label = tk.Label(
+            self.tooltip_window,
+            text=self.text,
+            background="lightyellow",
+            relief="solid",
+            borderwidth=1,
+            font=("Arial", 10)
+        )
+        label.pack()
+
+    def hide_tooltip(self, event):
+        """Hide the tooltip."""
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+            self.tooltip_window = None
+
 class ModLauncher(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -61,11 +95,13 @@ class ModLauncher(tk.Tk):
         # Select Folder Button
         self.folder_button = tk.Button(self.top_frame, text="Select Install Folder", command=self.select_folder)
         self.folder_button.pack()
+        Tooltip(self.folder_button, "Install it in a copy of the 'aotr' folder of the Age of the Ring mod.")
 
         # Uninstall Mod Button (Hidden by default)
         self.uninstall_button = tk.Button(self.top_frame, text="Uninstall Mod", command=self.uninstall_mod)
         self.uninstall_button.pack()
         self.uninstall_button.pack_forget()
+        Tooltip(self.uninstall_button, "Remove the mod and delete all its files and folders.")
 
     def create_news_section(self):
         """Creates the news section in the middle."""
@@ -91,6 +127,7 @@ class ModLauncher(tk.Tk):
             self.bottom_frame, text="Checking...", state="disabled", command=self.download_and_extract_mod
         )
         self.download_button.pack(pady=5)
+        # Tooltip(self.download_button, "Download and install the latest version of the mod.")
 
         # Progress Bar
         self.progress = ttk.Progressbar(self.bottom_frame, orient="horizontal", length=400, mode="determinate")
@@ -203,7 +240,7 @@ class ModLauncher(tk.Tk):
                     self.uninstall_button.pack()
                     self.folder_button.pack_forget()  # Hide select folder button
                 else:
-                    self.status_label.config(text="Mod is up-to-date.", fg="green")
+                    self.status_label.config(text=f"Mod is up-to-date ({local_version}).", fg="green")
                     self.download_button.pack_forget()
                     self.uninstall_button.pack()
                     self.folder_button.pack_forget()  # Hide select folder button
