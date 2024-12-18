@@ -13,9 +13,9 @@ import re
 from tkhtmlview import HTMLLabel
 
 # Constants
-MOD_INFO_URL = "https://storage.googleapis.com/realms-in-exile/updater/version.json"    # URL to check the mod version (JSON format)
-MOD_ZIP_URL = "https://storage.googleapis.com/realms-in-exile/updater/realms_beta.zip"  # URL to download the mod
-NEWS_URL = "https://storage.googleapis.com/realms-in-exile/updater/news.html"           # URL for news content
+MOD_INFO_URL = "https://storage.googleapis.com/realms-in-exile/updater/version.json"                # URL to check the mod version (JSON format)
+MOD_ZIP_URL = "https://storage.googleapis.com/realms-in-exile/updater/realms_beta.zip"              # URL to download the mod
+NEWS_URL = "https://raw.githubusercontent.com/hansnery/Realms-Launcher/refs/heads/main/news.html"   # URL for news content
 LAUNCHER_VERSION = "1.0.0"
 LAUNCHER_VERSION_URL = "https://storage.googleapis.com/realms-in-exile/updater/launcher_version.json"
 LAUNCHER_UPDATE_URL = "https://storage.googleapis.com/realms-in-exile/updater/launcher_update.zip"
@@ -35,15 +35,61 @@ class ModLauncher(tk.Tk):
 
         # UI Components
         self.create_banner()
-        self.create_news_area()
         self.create_buttons()
-        self.create_status_area()
+        self.create_main_area()
 
         # Load last folder and check mod version if a folder is saved
         self.after(100, self.load_last_folder)  # Ensure it starts after the UI is initialized
 
         # Check for launcher updates
         self.check_for_launcher_updates()
+
+    def create_main_area(self):
+        """Creates a single-column layout for news and dynamic download button."""
+        main_frame = tk.Frame(self)
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # News Section
+        news_frame = tk.Frame(main_frame, borderwidth=2, relief="groove", height=150, width=580)
+        news_frame.pack_propagate(False)  # Prevent resizing
+        news_frame.pack(fill="x", padx=5, pady=5)
+
+        tk.Label(news_frame, text="Latest News", font=("Arial", 12, "bold")).pack()
+        self.news_label = HTMLLabel(news_frame, html=self.fetch_news(), font=("Arial", 10))
+        self.news_label.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # Status Label
+        self.status_label = tk.Label(
+            self,
+            text="Checking mod status...",
+            font=("Arial", 10),
+            fg="blue",
+            anchor="center"
+        )
+        self.status_label.pack(pady=5)
+
+        # Dynamic Button (Bottom)
+        self.download_button = tk.Button(
+            self,
+            text="Checking...",
+            state="disabled",
+            command=self.download_and_extract_mod,
+            font=("Arial", 10)
+        )
+        self.download_button.pack(pady=5)
+
+        # Installation Folder Display
+        self.folder_display = tk.Label(
+            self,
+            text="Installation Folder: Not selected",
+            font=("Arial", 10),
+            anchor="w",
+            justify="left"
+        )
+        self.folder_display.pack(fill="x", padx=10, pady=5)
+        self.progress = ttk.Progressbar(self, orient="horizontal", length=400, mode="determinate")
+        self.progress.pack(pady=5)
+        self.progress.pack_forget()  # Initially hide it
         
     def create_banner(self):
         """Displays a banner image at the top."""
@@ -56,19 +102,6 @@ class ModLauncher(tk.Tk):
             banner.pack()
         except Exception as e:
             self.version_info.set(f"Image Error: {e}")
-
-    def create_news_area(self):
-        """Creates a news area using HTMLLabel for lightweight HTML rendering."""
-        news_frame = tk.Frame(self, borderwidth=2, relief="groove", height=200)
-        news_frame.pack_propagate(False)  # Prevent the frame from expanding
-        news_frame.pack(padx=10, pady=10, fill="x")
-
-        # Title
-        tk.Label(news_frame, text="Latest News", font=("Arial", 14, "bold")).pack()
-
-        # HTML news content
-        self.news_label = HTMLLabel(news_frame, html=self.fetch_news())
-        self.news_label.pack(fill="both", expand=True, padx=5, pady=5)
         
     def fetch_news(self):
         """Fetch plain news content from the server."""
@@ -102,23 +135,21 @@ class ModLauncher(tk.Tk):
     def load_last_folder(self):
         """Loads the last selected folder from the Windows Registry and checks for mod updates."""
         try:
-            # Open Registry and read the folder path
             key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PATH)
             folder, _ = winreg.QueryValueEx(key, "InstallFolder")
             winreg.CloseKey(key)
-            
-            # Verify the folder exists
+
             if os.path.exists(folder):
-                self.install_folder.set(folder)  # Set the folder path
-                self.version_info.set(f"Folder loaded: {folder}. Checking mod version...")
-                self.after(100, self.check_for_mod_updates)  # Delay to allow the UI to update
+                self.install_folder.set(folder)
+                self.folder_display.config(text=f"Installation Folder: {folder}")
+                print(f"Loaded folder: {folder}")  # Debugging line
+                self.check_for_mod_updates()
             else:
                 self.version_info.set("Saved folder not found. Please select a new folder.")
         except FileNotFoundError:
             self.version_info.set("No folder saved. Please select an install folder.")
         except Exception as e:
             print(f"Error loading folder from registry: {e}")
-            self.version_info.set("Error loading last folder. Please select a new folder.")
 
     def save_last_folder(self, folder):
         """Saves the selected folder path to the Windows Registry."""
@@ -130,76 +161,72 @@ class ModLauncher(tk.Tk):
             print(f"Error saving folder to registry: {e}")
 
     def create_buttons(self):
-        """Adds buttons for selecting folder and updating."""
+        """Removes the unnecessary Download Mod button (only keeps Select Folder)."""
         button_frame = tk.Frame(self)
         button_frame.pack(pady=10)
 
         # Folder Selection Button
         tk.Button(button_frame, text="Select Install Folder", command=self.select_folder).pack(side="left", padx=5)
-        # Download Mod Button
-        tk.Button(button_frame, text="Download Mod", command=self.download_and_extract_mod).pack(side="left", padx=5)
-        # Exit Button
-        # tk.Button(button_frame, text="Exit", command=self.quit).pack(side="left", padx=5)
-
-    def create_status_area(self):
-        """Adds a status label for version information."""
-        self.status_label = tk.Label(self, textvariable=self.version_info, font=("Arial", 10))
-        self.status_label.pack(pady=10)
 
     def select_folder(self):
         """Opens a dialog to select the mod installation folder and checks for existing mod version."""
         folder = filedialog.askdirectory()
         if folder:
             self.install_folder.set(folder)
-            self.save_last_folder(folder)  # Save the folder
-            version = self.get_local_version()
-
-            if version == "not installed":
-                self.version_info.set(f"No mod found in the selected folder: {folder}. Ready to install.")
-            else:
-                self.version_info.set(f"Mod found in folder: {folder}. Installed version: {version}")
-                self.check_for_mod_updates()
+            self.folder_display.config(text=f"Installation Folder: {folder}")
+            self.save_last_folder(folder)
+            self.check_for_mod_updates()
     
     def check_for_mod_updates(self):
-        """Checks the current mod version and notifies if updates are available."""
+        """Checks the current mod version and dynamically updates the button and label."""
         if not self.install_folder.get():
-            self.version_info.set("Please select an install folder first.")
+            self.status_label.config(text="Please select an install folder first.", fg="red")
+            self.download_button.config(text="Select Folder", state="disabled")
             return
 
         try:
-            self.version_info.set("Checking mod version...")
+            self.status_label.config(text="Checking mod version...", fg="blue")
             response = requests.get(f"{MOD_INFO_URL}?t={int(time.time())}")
             if response.status_code == 200:
                 mod_info = response.json()
                 latest_version = mod_info.get("version", "0.0.0")
-                changelog = mod_info.get("changelog", "No changelog available.")
                 local_version = self.get_local_version()
 
-                if local_version != latest_version:
-                    self.version_info.set(
-                        f"New mod version {latest_version} available.\n{changelog}\n"
-                        f"Located in: {self.install_folder.get()}\n"
-                        "Click 'Download Mod' to install the update."
+                if local_version == "not installed":
+                    self.status_label.config(text="No mod found. Ready to download.", fg="green")
+                    self.download_button.config(text="Download Mod", state="normal")
+                elif local_version != latest_version:
+                    self.status_label.config(
+                        text=f"New version {latest_version} available! (Installed: {local_version})", fg="orange"
                     )
+                    self.download_button.config(text="Download Update", state="normal")
                 else:
-                    self.version_info.set(
-                        f"Mod is already up-to-date.\nLocated in: {self.install_folder.get()}"
-                    )
+                    self.status_label.config(text="Mod is up-to-date.", fg="green")
+                    self.download_button.config(text="Mod Up-to-date", state="disabled")
             else:
-                self.version_info.set("Failed to check mod version.")
+                self.status_label.config(text="Failed to check mod version.", fg="red")
+                self.download_button.config(text="Retry", state="normal")
         except Exception as e:
-            self.version_info.set(f"Error checking mod version: {e}")
+            self.status_label.config(text=f"Error checking version: {e}", fg="red")
+            self.download_button.config(text="Retry", state="normal")
 
     def get_local_version(self):
         """Reads the local mod version from realms_version.json or returns 'not installed'."""
-        version_file = os.path.join(self.install_folder.get(), "realms_version.json")
+        folder = self.install_folder.get()  # Ensure the folder path is set
+        if not folder:
+            print("No installation folder selected.")  # Debugging line
+            return "not installed"
+
+        version_file = os.path.join(folder, "realms_version.json")
         if os.path.exists(version_file):
             try:
                 with open(version_file, "r") as file:
                     data = json.load(file)
                     return data.get("version", "not installed")
-            except Exception:
-                return "not installed"
+            except json.JSONDecodeError:
+                print("Error: realms_version.json is not valid JSON.")
+            except Exception as e:
+                print(f"Error reading version file: {e}")
         return "not installed"
 
     def download_and_extract_mod(self):
@@ -279,20 +306,6 @@ class ModLauncher(tk.Tk):
               self.version_info.set("Failed to fetch mod version for saving.")
       except Exception as e:
           self.version_info.set(f"Error writing mod version: {e}")
-
-    def create_status_area(self):
-      """Adds a status label and a hidden progress bar for version information."""
-      status_frame = tk.Frame(self)
-      status_frame.pack(pady=10, fill="x")
-
-      # Status label
-      self.status_label = tk.Label(status_frame, textvariable=self.version_info, font=("Arial", 10))
-      self.status_label.pack(pady=5)
-
-      # Progress bar (hidden initially)
-      self.progress = ttk.Progressbar(status_frame, orient="horizontal", length=400, mode="determinate")
-      self.progress.pack(pady=5)
-      self.progress.pack_forget()  # Hide initially
 
 if __name__ == "__main__":
     app = ModLauncher()
