@@ -55,7 +55,7 @@ class ModLauncher(tk.Tk):
         news_frame.pack(fill="x", padx=5, pady=5)
 
         tk.Label(news_frame, text="Latest News", font=("Arial", 12, "bold")).pack()
-        self.news_label = HTMLLabel(news_frame, html=self.fetch_news(), font=("Arial", 10))
+        self.news_label = HTMLLabel(news_frame, html=self.fetch_news())
         self.news_label.pack(fill="both", expand=True, padx=5, pady=5)
 
         # Status Label
