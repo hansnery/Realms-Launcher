@@ -88,20 +88,22 @@ class ModLauncher(tk.Tk):
             print(f"Error loading banner: {e}")
 
     def create_top_buttons(self):
-        """Creates top buttons for folder selection and uninstallation."""
+        """Creates top buttons for folder selection, uninstallation, and creating shortcuts."""
         self.top_frame = tk.Frame(self)
         self.top_frame.pack(pady=10)
 
-        # Select Folder Button
+        # Use pack for consistent geometry management
         self.folder_button = tk.Button(self.top_frame, text="Select Install Folder", command=self.select_folder)
-        self.folder_button.pack()
+        self.folder_button.pack(side="left", padx=10, pady=5)
         Tooltip(self.folder_button, "Install it in a copy of the 'aotr' folder of the Age of the Ring mod.")
 
-        # Uninstall Mod Button (Hidden by default)
-        self.uninstall_button = tk.Button(self.top_frame, text="Uninstall Mod", command=self.uninstall_mod)
-        self.uninstall_button.pack()
-        self.uninstall_button.pack_forget()
+        self.uninstall_button = tk.Button(self.top_frame, text="Uninstall Mod", command=self.uninstall_mod, state="disabled")
+        self.uninstall_button.pack(side="left", padx=10, pady=5)
         Tooltip(self.uninstall_button, "Remove the mod and delete all its files and folders.")
+
+        self.create_shortcut_button = tk.Button(self.top_frame, text="Create Shortcut", command=self.create_shortcut, state="disabled")
+        self.create_shortcut_button.pack(side="left", padx=10, pady=5)
+        Tooltip(self.create_shortcut_button, "Create a desktop shortcut to launch the mod.")
 
     def create_news_section(self):
         """Creates the news section in the middle."""
@@ -177,7 +179,7 @@ class ModLauncher(tk.Tk):
         self.status_label.config(text="No folder saved. Please select an installation folder.", fg="red")
         self.folder_label.config(text="Installation Folder: Not selected")  # Reset the label
         self.hide_download_button()
-        self.uninstall_button.pack_forget()
+        self.uninstall_button.config(state="disabled")  # Disable the Uninstall button instead of hiding
 
     def select_folder(self):
         """Opens dialog to select folder and checks mod updates."""
@@ -229,30 +231,37 @@ class ModLauncher(tk.Tk):
                     self.status_label.config(text="No mod found. Ready to download.", fg="green")
                     self.download_button.config(text="Download Mod", state="normal")
                     self.show_download_button()
-                    self.uninstall_button.pack_forget()
-                    self.folder_button.pack()  # Show select folder button
+                    self.uninstall_button.config(state="disabled")  # Disable Uninstall button
+                    self.create_shortcut_button.config(state="disabled")  # Disable Shortcut button
+                    self.folder_button.config(state="normal")  # Enable Select Folder button
                 elif local_version != remote_version:
                     self.status_label.config(
                         text=f"Update available: {remote_version} (Installed: {local_version})", fg="orange"
                     )
                     self.download_button.config(text="Download Update", state="normal")
                     self.show_download_button()
-                    self.uninstall_button.pack()
-                    self.folder_button.pack_forget()  # Hide select folder button
+                    self.uninstall_button.config(state="normal")  # Enable Uninstall button
+                    self.create_shortcut_button.config(state="normal")  # Enable Shortcut button
+                    self.folder_button.config(state="disabled")  # Disable Select Folder button
                 else:
                     self.status_label.config(text=f"Mod is up-to-date ({local_version}).", fg="green")
-                    self.download_button.pack_forget()
-                    self.uninstall_button.pack()
-                    self.folder_button.pack_forget()  # Hide select folder button
+                    self.hide_download_button()  # Hide the download button
+                    self.uninstall_button.config(state="normal")  # Ensure Uninstall button is enabled
+                    self.create_shortcut_button.config(state="normal")  # Enable Shortcut button
+                    self.folder_button.config(state="disabled")  # Disable Select Folder button
             else:
                 self.status_label.config(text="Failed to check for updates.", fg="red")
                 self.download_button.config(text="Retry", state="normal")
                 self.show_download_button()
+                self.uninstall_button.config(state="disabled")  # Disable Uninstall button
+                self.create_shortcut_button.config(state="disabled")  # Disable Shortcut button
 
         except Exception as e:
             self.status_label.config(text=f"Error: {e}", fg="red")
             self.download_button.config(text="Retry", state="normal")
             self.show_download_button()
+            self.uninstall_button.config(state="disabled")  # Disable Uninstall button
+            self.create_shortcut_button.config(state="disabled")  # Disable Shortcut button
 
     def show_download_button(self):
         """Show the download button."""
@@ -270,8 +279,9 @@ class ModLauncher(tk.Tk):
             return
 
         try:
-            # Show progress bar
-            self.progress.pack()
+            # Hide the Download button during the download process
+            self.hide_download_button()
+            self.progress.pack()  # Show progress bar
             self.status_label.config(text="Downloading...", fg="blue")
             self.update()
 
@@ -303,14 +313,22 @@ class ModLauncher(tk.Tk):
             with open(version_file, "w") as file:
                 json.dump({"version": self.get_remote_version()}, file)
 
+            # Update status and enable uninstall button
             self.status_label.config(text="Mod installed successfully!", fg="green")
-            self.progress.pack_forget()
+            self.uninstall_button.config(state="normal")  # Enable the Uninstall button
+            self.progress.pack_forget()  # Hide progress bar
             self.save_folder(install_path, installed=True)
-            self.check_for_mod_updates()
+
+            # Automatically create a shortcut
+            self.create_shortcut()
+
+            # Update UI after installation
+            self.check_for_mod_updates()  # Force an update of the UI
 
         except Exception as e:
             self.status_label.config(text=f"Error: {e}", fg="red")
-            self.progress.pack_forget()
+            self.progress.pack_forget()  # Hide progress bar
+            self.show_download_button()  # Show the Download button again if there's an error
 
     def get_remote_version(self):
         """Fetches the remote mod version."""
@@ -323,31 +341,94 @@ class ModLauncher(tk.Tk):
         return "0.0.0"
 
     def uninstall_mod(self):
-        """Uninstalls the mod and removes all folders and subfolders."""
+        """Uninstalls the mod and removes all folders, subfolders, and shortcuts."""
         folder = self.install_folder.get()
         if not folder or not os.path.exists(folder):
             messagebox.showerror("Error", "No valid installation folder selected.")
             return
 
-        if messagebox.askyesno("Confirm Uninstall", "Do you really want to uninstall the mod? This will delete all files and folders in the selected directory."):
+        if messagebox.askyesno(
+            "Confirm Uninstall",
+            "Do you really want to uninstall the mod? This will delete all files and folders in the selected directory."
+        ):
             try:
                 # Use shutil.rmtree to delete the folder and all its contents
                 shutil.rmtree(folder)
 
+                # Locate the shortcut and delete it
+                desktop = os.path.normpath(os.path.join(os.environ["USERPROFILE"], "Desktop"))
+                shortcut_pattern = "Realms in Exile v*.lnk"  # Pattern for the shortcut name
+
+                for file in os.listdir(desktop):
+                    if re.match(rf"Realms in Exile v.*\.lnk", file):  # Match all versions
+                        shortcut_path = os.path.join(desktop, file)
+                        os.remove(shortcut_path)  # Delete the shortcut
+                        print(f"Deleted shortcut: {shortcut_path}")
+
                 # Reset UI and clear registry
-                self.status_label.config(text="Mod uninstalled successfully. All files and folders were removed.", fg="green")
+                self.status_label.config(
+                    text="Mod uninstalled successfully. All files and folders were removed.", fg="green"
+                )
                 self.folder_label.config(text="Installation Folder: Not selected")
                 self.install_folder.set("")
                 self.save_folder("", installed=False)
 
                 # Update UI elements
-                self.hide_download_button()
-                self.uninstall_button.pack_forget()
-                self.folder_button.pack()
+                self.hide_download_button()  # Ensure the Download button is hidden
+                self.uninstall_button.config(state="disabled")  # Disable the Uninstall button (no hiding)
+                self.create_shortcut_button.config(state="disabled")  # Disable the Shortcut button
+                self.folder_button.config(state="normal")  # Enable the Select Folder button
 
             except Exception as e:
                 self.status_label.config(text=f"Error uninstalling mod: {e}", fg="red")
                 print(f"Error during uninstallation: {e}")
+
+    def create_shortcut(self):
+        """Creates a shortcut to launch the mod with the appropriate parameters."""
+        try:
+            # Locate the game executable from the registry
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Electronic Arts\Electronic Arts\The Lord of the Rings, The Rise of the Witch-king") as key:
+                game_install_path, _ = winreg.QueryValueEx(key, "InstallPath")
+
+            game_executable = os.path.normpath(os.path.join(game_install_path, "lotrbfme2ep1.exe"))
+            if not os.path.exists(game_executable):
+                messagebox.showerror("Error", "Could not find the game executable.")
+                return
+
+            # Get the mod folder and verify the icon file
+            mod_folder = os.path.normpath(self.install_folder.get())
+            icon_path = os.path.normpath(os.path.join(mod_folder, "aotr_fs.ico"))
+            if not os.path.exists(icon_path):
+                messagebox.showerror("Error", "Icon file 'aotr_fs.ico' not found in the mod folder.")
+                return
+
+            # Get the mod version
+            version_file = os.path.join(mod_folder, "realms_version.json")
+            if os.path.exists(version_file):
+                with open(version_file, "r") as file:
+                    mod_version = json.load(file).get("version", "unknown")
+            else:
+                mod_version = "unknown"
+
+            # Create the shortcut name
+            desktop = os.path.normpath(os.path.join(os.environ["USERPROFILE"], "Desktop"))
+            shortcut_name = f"Realms in Exile v{mod_version}.lnk"
+            shortcut_path = os.path.join(desktop, shortcut_name)
+
+            # Add the mod parameter
+            arguments = f'-mod "{mod_folder}"'
+
+            # Create the shortcut
+            import winshell
+            with winshell.shortcut(shortcut_path) as shortcut:
+                shortcut.path = game_executable
+                shortcut.arguments = arguments
+                shortcut.description = f"Launch Realms in Exile v{mod_version}"
+                shortcut.icon_location = (icon_path, 0)  # Use the icon from the mod folder
+
+            messagebox.showinfo("Shortcut Created", f"Shortcut created on the desktop: {shortcut_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to create shortcut: {e}")
 
 if __name__ == "__main__":
     app = ModLauncher()
