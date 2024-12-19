@@ -1,0 +1,3 @@
+pyinstaller --onefile --noconsole --icon="aotr_fs.ico" `
+--add-data "aotr_fs.ico:." `
+--add-data "banner.png:." realms_launcher.py

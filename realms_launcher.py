@@ -60,7 +60,7 @@ class ModLauncher(tk.Tk):
         self.title("Age of the Ring: Realms in Exile Launcher")
         self.geometry("600x500")
         self.resizable(False, False)
-        self.iconbitmap("aotr_fs.ico")
+        self.iconbitmap(self.resource_path("aotr_fs.ico"))
 
         # Selected folder and mod state
         self.install_folder = tk.StringVar()
@@ -75,10 +75,19 @@ class ModLauncher(tk.Tk):
         # Load last folder and check mod version
         self.after(100, self.load_last_folder)
 
+        # Check for updates for the launcher
+        self.check_launcher_update()
+
+    def resource_path(self, relative_path):
+        """Get the absolute path to the resource, works for both dev and PyInstaller."""
+        if hasattr(sys, '_MEIPASS'):
+            return os.path.join(sys._MEIPASS, relative_path)
+        return os.path.join(os.path.abspath("."), relative_path)
+
     def create_banner(self):
         """Displays the banner at the top."""
         try:
-            image = Image.open("banner.png")
+            image = Image.open(self.resource_path("banner.png"))
             image = image.resize((600, 150), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(image)
             banner = tk.Label(self, image=photo)
@@ -429,6 +438,88 @@ class ModLauncher(tk.Tk):
             messagebox.showinfo("Shortcut Created", f"Shortcut created on the desktop: {shortcut_path}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to create shortcut: {e}")
+
+    def check_launcher_update(self):
+        """Check if the launcher is up-to-date and prompt for update if necessary."""
+        try:
+            # Fetch the version.json file from the MOD_INFO_URL
+            print(f"Fetching version.json from: {MOD_INFO_URL}")
+            response = requests.get(MOD_INFO_URL)
+            print(f"Response status code: {response.status_code}")
+            
+            if response.status_code == 200:
+                version_data = response.json()
+                print(f"Response content: {version_data}")  # Log the parsed JSON
+                
+                # Extract launcher version from JSON
+                latest_launcher_version = version_data.get("launcher_version", "0.0.0")
+                print(f"Latest launcher version: {latest_launcher_version}")
+                print(f"Current launcher version: {LAUNCHER_VERSION}")
+                
+                # Compare current launcher version with the latest
+                if self.is_newer_version(LAUNCHER_VERSION, latest_launcher_version):
+                    print("New launcher version detected!")
+                    user_choice = messagebox.askyesno(
+                        "Launcher Update Available",
+                        f"A new launcher version ({latest_launcher_version}) is available. Update now?"
+                    )
+                    if user_choice:
+                        self.update_launcher()
+                    else:
+                        self.destroy()  # Close the application if the user clicks "No"
+                else:
+                    print(f"Launcher is up-to-date ({LAUNCHER_VERSION}).")
+            else:
+                messagebox.showerror("Update Check Failed", "Failed to fetch version.json.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to check for launcher updates: {e}")
+            self.destroy()  # Ensure the application closes in case of an error
+
+    def is_newer_version(self, current_version, latest_version):
+        """Compares two version strings numerically."""
+        try:
+            current_parts = list(map(int, current_version.split(".")))
+            latest_parts = list(map(int, latest_version.split(".")))
+            print(f"Comparing versions: {current_parts} < {latest_parts}")
+            return latest_parts > current_parts
+        except ValueError:
+            print("Error parsing version strings for comparison.")
+            return False
+
+    def update_launcher(self):
+        """Download the updated launcher as a zip file and let the user extract it manually."""
+        try:
+            # URL to the zip file containing the new launcher
+            launcher_zip_url = "https://storage.googleapis.com/realms-in-exile/updater/realms_launcher.zip"
+            temp_zip_path = os.path.join(os.getcwd(), "realms_launcher.zip")
+
+            # Download the zip file
+            response = requests.get(launcher_zip_url, stream=True)
+            total_size = int(response.headers.get("content-length", 0))
+            downloaded_size = 0
+
+            with open(temp_zip_path, "wb") as file:
+                for chunk in response.iter_content(chunk_size=1024):
+                    if chunk:
+                        file.write(chunk)
+                        downloaded_size += len(chunk)
+                        self.progress["value"] = (downloaded_size / total_size) * 100
+                        self.update()
+
+            # Notify the user and open the file location
+            messagebox.showinfo(
+                "Launcher Update",
+                f"The updated launcher has been downloaded to:\n\n{temp_zip_path}\n\nPlease extract it manually."
+            )
+
+            # Open the folder where the zip file is located
+            os.startfile(os.path.dirname(temp_zip_path))
+
+            # Exit the current launcher
+            self.quit()
+
+        except Exception as e:
+            messagebox.showerror("Update Failed", f"Failed to update the launcher: {e}")
 
 if __name__ == "__main__":
     app = ModLauncher()
