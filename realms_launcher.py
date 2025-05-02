@@ -15,10 +15,10 @@ import shutil  # Import shutil for removing directories
 import tempfile
 
 # Constants
-MOD_INFO_URL = "https://storage.googleapis.com/realms-in-exile/updater/version.json"
+MOD_INFO_URL = "https://realmsinexile.s3.us-east-005.backblazeb2.com/version.json"
 MOD_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_beta.zip"
 NEWS_URL = "https://raw.githubusercontent.com/hansnery/Realms-Launcher/refs/heads/main/news.html"
-LAUNCHER_VERSION = "1.0.1"
+LAUNCHER_VERSION = "1.0.2"
 REG_PATH = r"SOFTWARE\REALMS_Launcher"
 
 class Tooltip:
