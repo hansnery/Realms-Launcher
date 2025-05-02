@@ -513,6 +513,8 @@ class ModLauncher(tk.Tk):
             # Determine if this is a new installation or an update
             version_file = os.path.join(install_path, "realms_version.json")
             is_update = False
+            needs_base_first = False
+            local_version = "not installed"
             
             if os.path.exists(version_file):
                 try:
@@ -521,54 +523,45 @@ class ModLauncher(tk.Tk):
                         if content:
                             local_version = json.loads(content).get("version", "unknown")
                             is_update = True
+                            
+                            # Check if local version is lower than base version
+                            if self.is_lower_version(local_version, BASE_MOD_VERSION):
+                                needs_base_first = True
                 except:
                     is_update = False
             
-            # Choose the appropriate download URL
-            download_url = UPDATE_ZIP_URL if is_update else BASE_MOD_ZIP_URL
-            zip_path = os.path.join(install_path, "mod.zip" if not is_update else "update.zip")
-            
-            # Update status
-            if is_update:
-                self.status_label.config(text=f"Downloading update to version {remote_version}...", fg="blue")
-            else:
-                self.status_label.config(text=f"Downloading base mod version {BASE_MOD_VERSION}...", fg="blue")
-            
-            self.update()
-
-            # Download the ZIP file
-            response = requests.get(download_url, stream=True)
-            total_size = int(response.headers.get("content-length", 0))
-            downloaded_size = 0
-
-            with open(zip_path, "wb") as file:
-                for chunk in response.iter_content(chunk_size=1024):
-                    if chunk:
-                        file.write(chunk)
-                        downloaded_size += len(chunk)
-                        self.progress["value"] = (downloaded_size / total_size) * 100
-                        self.update()
-
-            # Update status during installation
-            if is_update:
-                self.status_label.config(text="Installing update...", fg="blue")
-            else:
-                self.status_label.config(text="Installing base mod...", fg="blue")
+            # First install base version if needed
+            if needs_base_first:
+                self.status_label.config(text=f"Local version {local_version} is older than base version {BASE_MOD_VERSION}. Installing base version first...", fg="blue")
+                self.update()
                 
-            self.update()
-
-            # Extract the ZIP file
-            with ZipFile(zip_path, "r") as zip_ref:
-                zip_ref.extractall(install_path)
-
-            os.remove(zip_path)  # Remove the downloaded ZIP file
-            
-            # Delete specific map folders after installation
-            self.delete_specific_folders(install_path)
-
-            # Save the installed version
-            with open(version_file, "w") as file:
-                json.dump({"version": remote_version}, file)
+                # Download and install base version
+                self.download_and_install_package(install_path, BASE_MOD_ZIP_URL, "base mod", BASE_MOD_VERSION)
+                
+                # Update local version to base version
+                with open(version_file, "w") as file:
+                    json.dump({"version": BASE_MOD_VERSION}, file)
+                
+                # Now we need to check if we need to update further
+                if self.is_lower_version(BASE_MOD_VERSION, remote_version):
+                    self.status_label.config(text=f"Base version installed. Now updating to version {remote_version}...", fg="blue")
+                    self.update()
+                    self.download_and_install_package(install_path, UPDATE_ZIP_URL, "update", remote_version)
+                    
+                    # Update to remote version
+                    with open(version_file, "w") as file:
+                        json.dump({"version": remote_version}, file)
+            else:
+                # Choose the appropriate download URL
+                download_url = UPDATE_ZIP_URL if is_update else BASE_MOD_ZIP_URL
+                version_label = "update" if is_update else "base mod"
+                version_number = remote_version if is_update else BASE_MOD_VERSION
+                
+                self.download_and_install_package(install_path, download_url, version_label, version_number)
+                
+                # Save the installed version
+                with open(version_file, "w") as file:
+                    json.dump({"version": remote_version if is_update else BASE_MOD_VERSION}, file)
 
             # Update status and enable uninstall button
             self.status_label.config(text="Mod installed successfully!", fg="green")
@@ -585,9 +578,6 @@ class ModLauncher(tk.Tk):
             # Show play button
             self.show_play_button()
 
-            # Automatically create a shortcut
-            # self.create_shortcut()
-
             # Update UI after installation
             self.check_for_mod_updates()  # Force an update of the UI
 
@@ -596,6 +586,70 @@ class ModLauncher(tk.Tk):
             self.progress.pack_forget()  # Hide progress bar
             self.show_download_button()  # Show the Download button again if there's an error
             self.hide_play_button()  # Hide play button on error
+
+    def download_and_install_package(self, install_path, download_url, version_label, version_number):
+        """Helper method to download and install a specific package."""
+        # Update status
+        self.status_label.config(text=f"Downloading {version_label} version {version_number}...", fg="blue")
+        self.update()
+        
+        # Create a temporary file name
+        zip_path = os.path.join(install_path, f"{version_label.replace(' ', '_')}.zip")
+        
+        # Download the ZIP file
+        response = requests.get(download_url, stream=True)
+        total_size = int(response.headers.get("content-length", 0))
+        downloaded_size = 0
+
+        with open(zip_path, "wb") as file:
+            for chunk in response.iter_content(chunk_size=1024):
+                if chunk:
+                    file.write(chunk)
+                    downloaded_size += len(chunk)
+                    self.progress["value"] = (downloaded_size / total_size) * 100
+                    self.update()
+
+        # Update status during installation
+        self.status_label.config(text=f"Installing {version_label}...", fg="blue")
+        self.update()
+
+        # Extract the ZIP file
+        with ZipFile(zip_path, "r") as zip_ref:
+            zip_ref.extractall(install_path)
+
+        # Remove the downloaded ZIP file
+        os.remove(zip_path)
+        
+        # Delete specific map folders after installation
+        self.delete_specific_folders(install_path)
+        
+        self.status_label.config(text=f"{version_label.capitalize()} version {version_number} installed successfully", fg="green")
+        self.update()
+
+    def is_lower_version(self, version1, version2):
+        """Compares two version strings and returns True if version1 is lower than version2."""
+        try:
+            v1_parts = list(map(int, version1.split(".")))
+            v2_parts = list(map(int, version2.split(".")))
+            
+            # Pad with zeros if needed
+            while len(v1_parts) < len(v2_parts):
+                v1_parts.append(0)
+            while len(v2_parts) < len(v1_parts):
+                v2_parts.append(0)
+                
+            # Compare version parts
+            for i in range(len(v1_parts)):
+                if v1_parts[i] < v2_parts[i]:
+                    return True
+                elif v1_parts[i] > v2_parts[i]:
+                    return False
+                    
+            # If we get here, versions are equal
+            return False
+        except ValueError:
+            # If we can't parse the versions, assume we need an update
+            return True
 
     def get_remote_version(self):
         """Fetches the remote mod version."""
