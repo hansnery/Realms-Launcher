@@ -13,12 +13,16 @@ import re
 from tkhtmlview import HTMLLabel
 import shutil  # Import shutil for removing directories
 import tempfile
+import subprocess  # Import subprocess for launching the game
 
 # Constants
 MOD_INFO_URL = "https://realmsinexile.s3.us-east-005.backblazeb2.com/version.json"
-MOD_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_beta.zip"
+BASE_MOD_VERSION = "0.7.3"  # Base version of the mod
+BASE_MOD_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_beta.zip"  # Base mod download
+UPDATE_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_update.zip"  # Update package
+LAUNCHER_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_launcher.zip"  # Launcher update package
 NEWS_URL = "https://raw.githubusercontent.com/hansnery/Realms-Launcher/refs/heads/main/news.html"
-LAUNCHER_VERSION = "1.0.2"
+LAUNCHER_VERSION = "1.0.3"  # Updated launcher version
 REG_PATH = r"SOFTWARE\REALMS_Launcher"
 
 class Tooltip:
@@ -59,7 +63,7 @@ class ModLauncher(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Age of the Ring: Realms in Exile Launcher")
-        self.geometry("600x500")
+        self.geometry("600x520")
         self.resizable(False, False)
         self.iconbitmap(self.resource_path("aotr_fs.ico"))
 
@@ -116,8 +120,8 @@ class ModLauncher(tk.Tk):
         Tooltip(self.uninstall_button, "Remove the mod and delete all its files and folders.")
 
         self.create_shortcut_button = tk.Button(self.top_frame, text="Create Shortcut", command=self.create_shortcut, state="disabled")
-        self.create_shortcut_button.pack(side="left", padx=10, pady=5)
-        Tooltip(self.create_shortcut_button, "Create a desktop shortcut to launch the mod.")
+        # self.create_shortcut_button.pack(side="left", padx=10, pady=5)
+        # Tooltip(self.create_shortcut_button, "Create a desktop shortcut to launch the mod.")
         
         # Language dropdown
         language_frame = tk.Frame(self.top_frame)
@@ -152,14 +156,35 @@ class ModLauncher(tk.Tk):
         self.status_label = tk.Label(self.bottom_frame, text="Checking mod status...", fg="blue")
         self.status_label.pack(pady=5)
 
+        # Button frame for Play and Download buttons
+        self.button_frame = tk.Frame(self.bottom_frame)
+        self.button_frame.pack(pady=5)
+        
+        # Play Button (initially hidden)
+        self.play_button = tk.Button(
+            self.button_frame,
+            text="Play Mod",
+            #bg="green",
+            # fg="white",
+            font=("Arial", 10, "bold"),
+            width=15,
+            height=2,
+            command=self.launch_game
+        )
+        
         # Download Button
         self.download_button = tk.Button(
-            self.bottom_frame,
+            self.button_frame,
             text="Checking...",
             state="disabled",
+            bg="green",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            width=15,
+            height=2,
             command=self.download_and_extract_mod
         )
-        self.download_button.pack(pady=5)
+        self.download_button.pack(side="left", padx=5)
 
         # Progress Bar
         self.progress = ttk.Progressbar(self.bottom_frame, orient="horizontal", length=400, mode="determinate")
@@ -168,25 +193,27 @@ class ModLauncher(tk.Tk):
 
         # Bottom info frame (folder path on the left, version on the right)
         self.bottom_info_frame = tk.Frame(self)
-        self.bottom_info_frame.pack(side="bottom", fill="x", padx=10, pady=5)
+        self.bottom_info_frame.pack(side="bottom", fill="x", padx=10, pady=10)  # Increase pady from 5 to 10
 
         # Folder Label (left)
         self.folder_label = tk.Label(
             self.bottom_info_frame,
             text="Installation Folder: Not selected",
             font=("Arial", 10),
-            anchor="w"
+            anchor="w",
+            height=2  # Add this line to give more vertical space
         )
-        self.folder_label.pack(side="left")
+        self.folder_label.pack(side="left", fill="x", expand=True)  # Add fill and expand
 
         # Launcher Version Label (right)
         self.version_label = tk.Label(
             self.bottom_info_frame,
             text=f"Launcher v{LAUNCHER_VERSION}",
             font=("Arial", 10),
-            anchor="e"
+            anchor="e",
+            height=2  # Match the height with folder_label
         )
-        self.version_label.pack(side="right")
+        self.version_label.pack(side="right", padx=(10, 0))  # Add some padding between labels
 
     def fetch_news(self):
         """Fetches the news content."""
@@ -238,6 +265,7 @@ class ModLauncher(tk.Tk):
         self.status_label.config(text="No folder saved. Please select an installation folder.", fg="red")
         self.folder_label.config(text="Installation Folder: Not selected")  # Reset the label
         self.hide_download_button()
+        self.hide_play_button()  # Hide play button
         self.uninstall_button.config(state="disabled")  # Disable the Uninstall button instead of hiding
         self.create_shortcut_button.config(state="disabled")  # Disable the Shortcut button
         self.language_dropdown.config(state="disabled")  # Disable the language dropdown
@@ -254,6 +282,7 @@ class ModLauncher(tk.Tk):
         else:
             self.status_label.config(text="Please select an installation folder.", fg="red")
             self.hide_download_button()
+            self.hide_play_button()  # Hide play button
 
     def save_folder(self, folder, installed):
         """Saves the folder path and installation state to the registry."""
@@ -290,11 +319,12 @@ class ModLauncher(tk.Tk):
                 remote_version = response.json().get("version", "0.0.0")
 
                 if local_version == "not installed":
-                    self.status_label.config(text="No mod found. Ready to download.", fg="green")
-                    self.download_button.config(text="Download Mod", state="normal")
+                    self.status_label.config(text=f"No mod found. Ready to download base version {BASE_MOD_VERSION}.", fg="green")
+                    self.download_button.config(text="Download Base Mod", state="normal")
                     self.show_download_button()
+                    self.hide_play_button()  # Hide play button
                     self.uninstall_button.config(state="disabled")  # Disable Uninstall button
-                    self.create_shortcut_button.config(state="disabled")  # Disable Shortcut button
+                    # self.create_shortcut_button.config(state="disabled")  # Disable Shortcut button
                     self.folder_button.config(state="normal")  # Enable Select Folder button
                     self.language_dropdown.config(state="disabled")  # Disable language dropdown
                 elif local_version != remote_version:
@@ -303,6 +333,7 @@ class ModLauncher(tk.Tk):
                     )
                     self.download_button.config(text="Download Update", state="normal")
                     self.show_download_button()
+                    self.show_play_button()  # Show play button for current version
                     self.uninstall_button.config(state="normal")  # Enable Uninstall button
                     self.create_shortcut_button.config(state="normal")  # Enable Shortcut button
                     self.folder_button.config(state="disabled")  # Disable Select Folder button
@@ -310,6 +341,7 @@ class ModLauncher(tk.Tk):
                 else:
                     self.status_label.config(text=f"Mod is up-to-date ({local_version}).", fg="green")
                     self.hide_download_button()  # Hide the download button
+                    self.show_play_button()  # Show play button
                     self.uninstall_button.config(state="normal")  # Ensure Uninstall button is enabled
                     self.create_shortcut_button.config(state="normal")  # Enable Shortcut button
                     self.folder_button.config(state="disabled")  # Disable Select Folder button
@@ -318,6 +350,7 @@ class ModLauncher(tk.Tk):
                 self.status_label.config(text="Failed to check for updates.", fg="red")
                 self.download_button.config(text="Retry", state="normal")
                 self.show_download_button()
+                self.hide_play_button()  # Hide play button on error
                 self.uninstall_button.config(state="disabled")  # Disable Uninstall button
                 self.create_shortcut_button.config(state="disabled")  # Disable Shortcut button
                 self.language_dropdown.config(state="disabled")  # Disable language dropdown
@@ -326,17 +359,26 @@ class ModLauncher(tk.Tk):
             self.status_label.config(text=f"Error: {e}", fg="red")
             self.download_button.config(text="Retry", state="normal")
             self.show_download_button()
+            self.hide_play_button()  # Hide play button on error
             self.uninstall_button.config(state="disabled")  # Disable Uninstall button
             self.create_shortcut_button.config(state="disabled")  # Disable Shortcut button
             self.language_dropdown.config(state="disabled")  # Disable language dropdown
 
     def show_download_button(self):
         """Show the download button."""
-        self.download_button.pack(pady=5)
+        self.download_button.pack(side="left", padx=5)
 
     def hide_download_button(self):
         """Hide the download button."""
         self.download_button.pack_forget()
+        
+    def show_play_button(self):
+        """Show the play button."""
+        self.play_button.pack(side="left", padx=5)
+        
+    def hide_play_button(self):
+        """Hide the play button."""
+        self.play_button.pack_forget()
         
     def change_language(self, event=None):
         """Change the language of the mod."""
@@ -462,13 +504,40 @@ class ModLauncher(tk.Tk):
         try:
             # Hide the Download button during the download process
             self.hide_download_button()
+            self.hide_play_button()  # Hide play button during installation
             self.progress.pack()  # Show progress bar
-            self.status_label.config(text="Downloading...", fg="blue")
+            
+            # Get remote version for comparison
+            remote_version = self.get_remote_version()
+            
+            # Determine if this is a new installation or an update
+            version_file = os.path.join(install_path, "realms_version.json")
+            is_update = False
+            
+            if os.path.exists(version_file):
+                try:
+                    with open(version_file, "r") as file:
+                        content = file.read().strip()
+                        if content:
+                            local_version = json.loads(content).get("version", "unknown")
+                            is_update = True
+                except:
+                    is_update = False
+            
+            # Choose the appropriate download URL
+            download_url = UPDATE_ZIP_URL if is_update else BASE_MOD_ZIP_URL
+            zip_path = os.path.join(install_path, "mod.zip" if not is_update else "update.zip")
+            
+            # Update status
+            if is_update:
+                self.status_label.config(text=f"Downloading update to version {remote_version}...", fg="blue")
+            else:
+                self.status_label.config(text=f"Downloading base mod version {BASE_MOD_VERSION}...", fg="blue")
+            
             self.update()
 
             # Download the ZIP file
-            zip_path = os.path.join(install_path, "mod.zip")
-            response = requests.get(MOD_ZIP_URL, stream=True)
+            response = requests.get(download_url, stream=True)
             total_size = int(response.headers.get("content-length", 0))
             downloaded_size = 0
 
@@ -480,7 +549,12 @@ class ModLauncher(tk.Tk):
                         self.progress["value"] = (downloaded_size / total_size) * 100
                         self.update()
 
-            self.status_label.config(text="Installing...", fg="blue")
+            # Update status during installation
+            if is_update:
+                self.status_label.config(text="Installing update...", fg="blue")
+            else:
+                self.status_label.config(text="Installing base mod...", fg="blue")
+                
             self.update()
 
             # Extract the ZIP file
@@ -493,9 +567,8 @@ class ModLauncher(tk.Tk):
             self.delete_specific_folders(install_path)
 
             # Save the installed version
-            version_file = os.path.join(install_path, "realms_version.json")
             with open(version_file, "w") as file:
-                json.dump({"version": self.get_remote_version()}, file)
+                json.dump({"version": remote_version}, file)
 
             # Update status and enable uninstall button
             self.status_label.config(text="Mod installed successfully!", fg="green")
@@ -508,9 +581,12 @@ class ModLauncher(tk.Tk):
             
             # Enable language dropdown
             self.language_dropdown.config(state="readonly")
+            
+            # Show play button
+            self.show_play_button()
 
             # Automatically create a shortcut
-            self.create_shortcut()
+            # self.create_shortcut()
 
             # Update UI after installation
             self.check_for_mod_updates()  # Force an update of the UI
@@ -519,6 +595,7 @@ class ModLauncher(tk.Tk):
             self.status_label.config(text=f"Error: {e}", fg="red")
             self.progress.pack_forget()  # Hide progress bar
             self.show_download_button()  # Show the Download button again if there's an error
+            self.hide_play_button()  # Hide play button on error
 
     def get_remote_version(self):
         """Fetches the remote mod version."""
@@ -529,6 +606,37 @@ class ModLauncher(tk.Tk):
         except Exception as e:
             print(f"Error fetching remote version: {e}")
         return "0.0.0"
+
+    def launch_game(self):
+        """Launches the game with the mod."""
+        try:
+            # Locate the game executable from the registry
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Electronic Arts\Electronic Arts\The Lord of the Rings, The Rise of the Witch-king") as key:
+                game_install_path, _ = winreg.QueryValueEx(key, "InstallPath")
+
+            # Get the exact path to the game executable
+            game_executable = os.path.normpath(os.path.join(game_install_path, "lotrbfme2ep1.exe"))
+            
+            # Check if executable exists
+            if not os.path.exists(game_executable):
+                messagebox.showerror("Error", f"Could not find the game executable at: {game_executable}")
+                return
+
+            # Get the mod folder
+            mod_folder = os.path.normpath(self.install_folder.get())
+
+            # Create the command line with mod parameter
+            cmd = f'"{game_executable}" -mod "{mod_folder}"'
+            print(f"Executing command: {cmd}")
+            
+            # Launch the game
+            subprocess.Popen(cmd, shell=True)
+            
+            # Minimize the launcher window after launching
+            self.iconify()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to launch the game: {e}")
 
     def uninstall_mod(self):
         """Uninstalls the mod and removes all folders, subfolders, and shortcuts."""
@@ -565,6 +673,7 @@ class ModLauncher(tk.Tk):
 
                 # Update UI elements
                 self.hide_download_button()  # Ensure the Download button is hidden
+                self.hide_play_button()  # Hide the Play button
                 self.uninstall_button.config(state="disabled")  # Disable the Uninstall button (no hiding)
                 self.create_shortcut_button.config(state="disabled")  # Disable the Shortcut button
                 self.folder_button.config(state="normal")  # Enable the Select Folder button
@@ -669,10 +778,8 @@ class ModLauncher(tk.Tk):
             return False
 
     def update_launcher(self):
+        """Downloads and installs the updated launcher."""
         try:
-            # URL to the zip file containing the new launcher
-            launcher_zip_url = "https://f005.backblazeb2.com/file/RealmsInExile/realms_launcher.zip"
-
             # Determine the folder where this executable or script is located
             if getattr(sys, 'frozen', False):
                 # Running in a PyInstaller bundle
@@ -684,7 +791,7 @@ class ModLauncher(tk.Tk):
             zip_filename = "realms_launcher.zip"
             zip_path = os.path.join(exe_dir, zip_filename)
 
-            response = requests.get(launcher_zip_url, stream=True)
+            response = requests.get(LAUNCHER_ZIP_URL, stream=True)
             if response.status_code != 200:
                 raise Exception(f"Unexpected status code: {response.status_code}")
 
