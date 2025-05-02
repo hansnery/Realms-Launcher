@@ -12,12 +12,13 @@ import winreg
 import re
 from tkhtmlview import HTMLLabel
 import shutil  # Import shutil for removing directories
+import tempfile
 
 # Constants
 MOD_INFO_URL = "https://storage.googleapis.com/realms-in-exile/updater/version.json"
-MOD_ZIP_URL = "https://storage.googleapis.com/realms-in-exile/updater/realms_beta.zip"
+MOD_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_beta.zip"
 NEWS_URL = "https://raw.githubusercontent.com/hansnery/Realms-Launcher/refs/heads/main/news.html"
-LAUNCHER_VERSION = "1.0.0"
+LAUNCHER_VERSION = "1.0.1"
 REG_PATH = r"SOFTWARE\REALMS_Launcher"
 
 class Tooltip:
@@ -65,6 +66,10 @@ class ModLauncher(tk.Tk):
         # Selected folder and mod state
         self.install_folder = tk.StringVar()
         self.is_installed = False
+        
+        # Language selection
+        self.language = tk.StringVar()
+        self.language.set("english")  # Default language
 
         # Layout Frames
         self.create_banner()
@@ -113,6 +118,20 @@ class ModLauncher(tk.Tk):
         self.create_shortcut_button = tk.Button(self.top_frame, text="Create Shortcut", command=self.create_shortcut, state="disabled")
         self.create_shortcut_button.pack(side="left", padx=10, pady=5)
         Tooltip(self.create_shortcut_button, "Create a desktop shortcut to launch the mod.")
+        
+        # Language dropdown
+        language_frame = tk.Frame(self.top_frame)
+        language_frame.pack(side="left", padx=10, pady=5)
+        
+        language_label = tk.Label(language_frame, text="Language:")
+        language_label.pack(side="left")
+        
+        self.language_dropdown = ttk.Combobox(language_frame, textvariable=self.language, state="readonly", width=15)
+        self.language_dropdown["values"] = ["English", "Portuguese (BR)"]
+        self.language_dropdown.current(0)  # Set default to English
+        self.language_dropdown.pack(side="left", padx=5)
+        self.language_dropdown.bind("<<ComboboxSelected>>", self.change_language)
+        Tooltip(self.language_dropdown, "Change the language of the mod.")
 
     def create_news_section(self):
         """Creates the news section in the middle."""
@@ -135,21 +154,39 @@ class ModLauncher(tk.Tk):
 
         # Download Button
         self.download_button = tk.Button(
-            self.bottom_frame, text="Checking...", state="disabled", command=self.download_and_extract_mod
+            self.bottom_frame,
+            text="Checking...",
+            state="disabled",
+            command=self.download_and_extract_mod
         )
         self.download_button.pack(pady=5)
-        # Tooltip(self.download_button, "Download and install the latest version of the mod.")
 
         # Progress Bar
         self.progress = ttk.Progressbar(self.bottom_frame, orient="horizontal", length=400, mode="determinate")
         self.progress.pack(pady=5)
         self.progress.pack_forget()
 
-        # Folder Path Display
+        # Bottom info frame (folder path on the left, version on the right)
+        self.bottom_info_frame = tk.Frame(self)
+        self.bottom_info_frame.pack(side="bottom", fill="x", padx=10, pady=5)
+
+        # Folder Label (left)
         self.folder_label = tk.Label(
-            self, text="Installation Folder: Not selected", font=("Arial", 10), anchor="w", justify="left"
+            self.bottom_info_frame,
+            text="Installation Folder: Not selected",
+            font=("Arial", 10),
+            anchor="w"
         )
-        self.folder_label.pack(fill="x", side="bottom", padx=10, pady=5)
+        self.folder_label.pack(side="left")
+
+        # Launcher Version Label (right)
+        self.version_label = tk.Label(
+            self.bottom_info_frame,
+            text=f"Launcher v{LAUNCHER_VERSION}",
+            font=("Arial", 10),
+            anchor="e"
+        )
+        self.version_label.pack(side="right")
 
     def fetch_news(self):
         """Fetches the news content."""
@@ -167,6 +204,19 @@ class ModLauncher(tk.Tk):
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PATH) as key:
                 folder, _ = winreg.QueryValueEx(key, "InstallFolder")
                 installed, _ = winreg.QueryValueEx(key, "Installed")
+                
+                # Try to load language setting if it exists
+                try:
+                    lang, _ = winreg.QueryValueEx(key, "Language")
+                    self.language.set(lang)
+                    if lang.lower() == "english":
+                        self.language_dropdown.current(0)
+                    elif lang.lower() == "portuguese (br)":
+                        self.language_dropdown.current(1)
+                except:
+                    # If language setting doesn't exist, default to English
+                    self.language.set("English")
+                    self.language_dropdown.current(0)
 
             if os.path.exists(folder):
                 if installed:  # Mod installed
@@ -189,6 +239,8 @@ class ModLauncher(tk.Tk):
         self.folder_label.config(text="Installation Folder: Not selected")  # Reset the label
         self.hide_download_button()
         self.uninstall_button.config(state="disabled")  # Disable the Uninstall button instead of hiding
+        self.create_shortcut_button.config(state="disabled")  # Disable the Shortcut button
+        self.language_dropdown.config(state="disabled")  # Disable the language dropdown
 
     def select_folder(self):
         """Opens dialog to select folder and checks mod updates."""
@@ -209,6 +261,7 @@ class ModLauncher(tk.Tk):
             with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_PATH) as key:
                 winreg.SetValueEx(key, "InstallFolder", 0, winreg.REG_SZ, folder)
                 winreg.SetValueEx(key, "Installed", 0, winreg.REG_DWORD, int(installed))
+                winreg.SetValueEx(key, "Language", 0, winreg.REG_SZ, self.language.get())
         except Exception as e:
             print(f"Error saving to registry: {e}")
 
@@ -243,6 +296,7 @@ class ModLauncher(tk.Tk):
                     self.uninstall_button.config(state="disabled")  # Disable Uninstall button
                     self.create_shortcut_button.config(state="disabled")  # Disable Shortcut button
                     self.folder_button.config(state="normal")  # Enable Select Folder button
+                    self.language_dropdown.config(state="disabled")  # Disable language dropdown
                 elif local_version != remote_version:
                     self.status_label.config(
                         text=f"Update available: {remote_version} (Installed: {local_version})", fg="orange"
@@ -252,18 +306,21 @@ class ModLauncher(tk.Tk):
                     self.uninstall_button.config(state="normal")  # Enable Uninstall button
                     self.create_shortcut_button.config(state="normal")  # Enable Shortcut button
                     self.folder_button.config(state="disabled")  # Disable Select Folder button
+                    self.language_dropdown.config(state="readonly")  # Enable language dropdown
                 else:
                     self.status_label.config(text=f"Mod is up-to-date ({local_version}).", fg="green")
                     self.hide_download_button()  # Hide the download button
                     self.uninstall_button.config(state="normal")  # Ensure Uninstall button is enabled
                     self.create_shortcut_button.config(state="normal")  # Enable Shortcut button
                     self.folder_button.config(state="disabled")  # Disable Select Folder button
+                    self.language_dropdown.config(state="readonly")  # Enable language dropdown
             else:
                 self.status_label.config(text="Failed to check for updates.", fg="red")
                 self.download_button.config(text="Retry", state="normal")
                 self.show_download_button()
                 self.uninstall_button.config(state="disabled")  # Disable Uninstall button
                 self.create_shortcut_button.config(state="disabled")  # Disable Shortcut button
+                self.language_dropdown.config(state="disabled")  # Disable language dropdown
 
         except Exception as e:
             self.status_label.config(text=f"Error: {e}", fg="red")
@@ -271,6 +328,7 @@ class ModLauncher(tk.Tk):
             self.show_download_button()
             self.uninstall_button.config(state="disabled")  # Disable Uninstall button
             self.create_shortcut_button.config(state="disabled")  # Disable Shortcut button
+            self.language_dropdown.config(state="disabled")  # Disable language dropdown
 
     def show_download_button(self):
         """Show the download button."""
@@ -279,6 +337,120 @@ class ModLauncher(tk.Tk):
     def hide_download_button(self):
         """Hide the download button."""
         self.download_button.pack_forget()
+        
+    def change_language(self, event=None):
+        """Change the language of the mod."""
+        if not self.is_installed:
+            return
+            
+        install_path = self.install_folder.get()
+        if not install_path:
+            messagebox.showerror("Error", "No installation folder selected.")
+            return
+            
+        # Data folder path
+        data_folder = os.path.join(install_path, "data")
+        translations_folder = os.path.join(data_folder, "translations")
+        
+        # Target file
+        target_file = os.path.join(data_folder, "lotr.str")
+        
+        # Source file based on language selection
+        selected_language = self.language.get().lower()
+        
+        if "english" in selected_language:
+            source_folder = os.path.join(translations_folder, "en")
+        elif "portuguese" in selected_language:
+            source_folder = os.path.join(translations_folder, "pt-br")
+        else:
+            messagebox.showerror("Error", f"Unsupported language: {selected_language}")
+            return
+            
+        source_file = os.path.join(source_folder, "lotr.str")
+        
+        # Check if source file exists
+        if not os.path.exists(source_file):
+            messagebox.showerror("Error", f"Language file not found: {source_file}")
+            return
+            
+        try:
+            # Copy language file
+            shutil.copy2(source_file, target_file)
+            
+            # Save language selection to registry
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_PATH) as key:
+                winreg.SetValueEx(key, "Language", 0, winreg.REG_SZ, self.language.get())
+                
+            messagebox.showinfo("Success", f"Language changed to {self.language.get()}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to change language: {e}")
+
+    def delete_specific_folders(self, install_path):
+        """Delete specific map folders from the mod installation directory."""
+        try:
+            # Path to the maps folder
+            maps_folder = os.path.join(install_path, "maps")
+            
+            # List of map folders to delete
+            map_folders_to_delete = [
+                # Adventure maps
+                "map mp adventure arthedain",
+                "map mp adventure dorwinion",
+                "map mp adventure durins folk",
+                "map mp adventure rhun",
+                "map mp adventure shadow and flame",
+                
+                # Fortress maps
+                "map mp fortress abrakhan",
+                "map mp fortress amon sul",
+                "map mp fortress barrow of cargast",
+                "map mp fortress caras galadhon",
+                "map mp fortress carn dum",
+                "map mp fortress dimrill gate",
+                "map mp fortress dol amroth",
+                "map mp fortress dol guldur",
+                "map mp fortress durthang",
+                "map mp fortress edennogrod",
+                "map mp fortress edoras",
+                "map mp fortress esgaroth",
+                "map mp fortress fornost",
+                "map mp fortress framsburg",
+                "map mp fortress gundabad",
+                "map mp fortress halls of the elvenking",
+                "map mp fortress helms deep",
+                "map mp fortress hidar",
+                "map mp fortress hornburg",
+                "map mp fortress ironfoots halls",
+                "map mp fortress isengard",
+                "map mp fortress kingdom of erebor",
+                "map mp fortress last homely house",
+                "map mp fortress minas morgul",
+                "map mp fortress minas tirith",
+                "map mp fortress pelargir",
+                "map mp fortress the angle",
+                "map mp fortress the dwarf hold",
+                "map mp fortress thorins halls",
+                "map mp fortress umbar",
+                "map mp fortress wulfborg"
+            ]
+            
+            self.status_label.config(text="Performing post-installation cleanup...", fg="blue")
+            self.update()
+            
+            for map_folder in map_folders_to_delete:
+                folder_path = os.path.join(maps_folder, map_folder)
+                if os.path.exists(folder_path) and os.path.isdir(folder_path):
+                    self.status_label.config(text=f"Cleaning up: Removing {map_folder}...", fg="blue")
+                    self.update()
+                    shutil.rmtree(folder_path)
+                    print(f"Deleted map folder: {folder_path}")
+            
+            self.status_label.config(text="Map cleanup completed successfully.", fg="green")
+            self.update()
+        except Exception as e:
+            print(f"Error during map cleanup: {e}")
+            self.status_label.config(text=f"Warning: Map cleanup failed - {str(e)}", fg="orange")
+            self.update()
 
     def download_and_extract_mod(self):
         """Downloads and installs the mod."""
@@ -316,6 +488,9 @@ class ModLauncher(tk.Tk):
                 zip_ref.extractall(install_path)
 
             os.remove(zip_path)  # Remove the downloaded ZIP file
+            
+            # Delete specific map folders after installation
+            self.delete_specific_folders(install_path)
 
             # Save the installed version
             version_file = os.path.join(install_path, "realms_version.json")
@@ -327,6 +502,12 @@ class ModLauncher(tk.Tk):
             self.uninstall_button.config(state="normal")  # Enable the Uninstall button
             self.progress.pack_forget()  # Hide progress bar
             self.save_folder(install_path, installed=True)
+            
+            # Apply the language
+            self.change_language()
+            
+            # Enable language dropdown
+            self.language_dropdown.config(state="readonly")
 
             # Automatically create a shortcut
             self.create_shortcut()
@@ -387,6 +568,7 @@ class ModLauncher(tk.Tk):
                 self.uninstall_button.config(state="disabled")  # Disable the Uninstall button (no hiding)
                 self.create_shortcut_button.config(state="disabled")  # Disable the Shortcut button
                 self.folder_button.config(state="normal")  # Enable the Select Folder button
+                self.language_dropdown.config(state="disabled")  # Disable language dropdown
 
             except Exception as e:
                 self.status_label.config(text=f"Error uninstalling mod: {e}", fg="red")
@@ -487,33 +669,45 @@ class ModLauncher(tk.Tk):
             return False
 
     def update_launcher(self):
-        """Download the updated launcher as a zip file and let the user extract it manually."""
         try:
             # URL to the zip file containing the new launcher
-            launcher_zip_url = "https://storage.googleapis.com/realms-in-exile/updater/realms_launcher.zip"
-            temp_zip_path = os.path.join(os.getcwd(), "realms_launcher.zip")
+            launcher_zip_url = "https://f005.backblazeb2.com/file/RealmsInExile/realms_launcher.zip"
 
-            # Download the zip file
+            # Determine the folder where this executable or script is located
+            if getattr(sys, 'frozen', False):
+                # Running in a PyInstaller bundle
+                exe_dir = os.path.dirname(sys.executable)
+            else:
+                # Running as a normal Python script
+                exe_dir = os.path.dirname(os.path.abspath(__file__))
+
+            zip_filename = "realms_launcher.zip"
+            zip_path = os.path.join(exe_dir, zip_filename)
+
             response = requests.get(launcher_zip_url, stream=True)
+            if response.status_code != 200:
+                raise Exception(f"Unexpected status code: {response.status_code}")
+
             total_size = int(response.headers.get("content-length", 0))
             downloaded_size = 0
 
-            with open(temp_zip_path, "wb") as file:
-                for chunk in response.iter_content(chunk_size=1024):
+            with open(zip_path, "wb") as file:
+                # Increase chunk_size to 8192 for more efficient downloads
+                for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         file.write(chunk)
                         downloaded_size += len(chunk)
-                        self.progress["value"] = (downloaded_size / total_size) * 100
+                        if total_size:
+                            self.progress["value"] = (downloaded_size / total_size) * 100
                         self.update()
 
-            # Notify the user and open the file location
             messagebox.showinfo(
                 "Launcher Update",
-                f"The updated launcher has been downloaded to:\n\n{temp_zip_path}\n\nPlease extract it manually."
+                f"The updated launcher has been downloaded to:\n\n{zip_path}\n\nPlease extract it manually."
             )
 
-            # Open the folder where the zip file is located
-            os.startfile(os.path.dirname(temp_zip_path))
+            # Open the folder where the file was saved
+            os.startfile(exe_dir)
 
             # Exit the current launcher
             self.quit()
