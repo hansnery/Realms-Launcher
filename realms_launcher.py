@@ -12,9 +12,10 @@ import winreg
 import re
 from tkhtmlview import HTMLLabel
 import shutil  # Import shutil for removing directories
-import tempfile
 import subprocess  # Import subprocess for launching the game
 import rarfile  # Import rarfile for RAR extraction
+import ctypes  # Import ctypes for admin privileges check
+import psutil  # Import psutil for process management
 
 # Constants
 MOD_INFO_URL = "https://realmsinexile.s3.us-east-005.backblazeb2.com/version.json"
@@ -26,6 +27,34 @@ LAUNCHER_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_launc
 NEWS_URL = "https://raw.githubusercontent.com/hansnery/Realms-Launcher/refs/heads/main/news.html"
 LAUNCHER_VERSION = "1.0.4"  # Updated launcher version
 REG_PATH = r"SOFTWARE\REALMS_Launcher"
+
+
+def is_admin():
+    """Check if the application is running with admin privileges."""
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except Exception:
+        return False
+
+
+def run_as_admin():
+    """Restart the application with admin privileges."""
+    try:
+        if getattr(sys, 'frozen', False):
+            # Running in a PyInstaller bundle
+            script = sys.executable
+        else:
+            # Running as a normal Python script
+            script = sys.argv[0]
+        
+        ctypes.windll.shell32.ShellExecuteW(
+            None, "runas", sys.executable, script, None, 1
+        )
+        return True
+    except Exception as e:
+        print(f"Error running as admin: {e}")
+        return False
+
 
 class Tooltip:
     """A simple tooltip class for Tkinter widgets."""
@@ -61,9 +90,16 @@ class Tooltip:
             self.tooltip_window.destroy()
             self.tooltip_window = None
 
+
 class ModLauncher(tk.Tk):
     def __init__(self):
         super().__init__()
+        
+        # Check for admin privileges on startup only if running as compiled exe
+        is_frozen = getattr(sys, 'frozen', False)
+        if is_frozen and not is_admin():
+            self.check_admin_privileges()
+        
         self.title("Age of the Ring: Realms in Exile Launcher")
         self.geometry("600x520")
         self.resizable(False, False)
@@ -88,6 +124,44 @@ class ModLauncher(tk.Tk):
 
         # Check for updates for the launcher
         self.check_launcher_update()
+
+    def check_admin_privileges(self):
+        """Check if running with admin privileges and prompt user if not."""
+        if not is_admin():
+            result = messagebox.askyesno(
+                "Admin Privileges Required",
+                "This launcher requires administrator privileges to function "
+                "properly.\n\n"
+                "Would you like to restart the application with admin "
+                "privileges?\n\n"
+                "Note: This will close the current instance and restart with "
+                "elevated permissions.",
+                icon="warning"
+            )
+            
+            if result:
+                # Try to restart with admin privileges
+                if run_as_admin():
+                    # Close the current instance
+                    self.quit()
+                    sys.exit(0)
+                else:
+                    messagebox.showerror(
+                        "Error",
+                        "Failed to restart with admin privileges.\n"
+                        "Please run the launcher as administrator manually."
+                    )
+                    # Continue without admin privileges 
+                    # (user chose to proceed anyway)
+            else:
+                # User chose not to restart, show warning but continue
+                messagebox.showwarning(
+                    "Limited Functionality",
+                    "The launcher will continue without admin privileges.\n"
+                    "Some features may not work correctly.\n\n"
+                    "To ensure full functionality, please run the launcher as "
+                    "administrator."
+                )
 
     def resource_path(self, relative_path):
         """Get the absolute path to the resource, works for both dev and PyInstaller."""
@@ -339,8 +413,17 @@ class ModLauncher(tk.Tk):
                 remote_version = response.json().get("version", "0.0.0")
 
                 if local_version == "not installed":
-                    self.status_label.config(text=f"No mod found. Ready to download base version {BASE_MOD_VERSION}.", fg="green")
-                    self.download_button.config(text="Download Base Mod", state="normal")
+                    # Get the Realms in Exile version for display
+                    try:
+                        response = requests.get(MOD_INFO_URL)
+                        if response.status_code == 200:
+                            realms_version = response.json().get("version", BASE_MOD_VERSION)
+                        else:
+                            realms_version = BASE_MOD_VERSION
+                    except:
+                        realms_version = BASE_MOD_VERSION
+                    self.status_label.config(text=f"Realms in Exile not found. Ready to download version {realms_version}.", fg="green")
+                    self.download_button.config(text="Download Files", state="normal")
                     self.show_download_button()
                     self.hide_play_button()  # Hide play button
                     self.uninstall_button.config(state="disabled")  # Disable Uninstall button
@@ -625,13 +708,96 @@ class ModLauncher(tk.Tk):
             return
 
         try:
+            # Disable folder selection during download/installation
+            self.folder_button.config(state="disabled")
+            
             # Hide the Download button during the download process
             self.hide_download_button()
             self.hide_play_button()  # Hide play button during installation
             self.progress.pack()  # Show progress bar
             
+            # Check for existing AOTR RAR file from previous failed installation
+            existing_rar_path = os.path.join(install_path, "aotr.rar")
+            
             # Check AOTR version and download if needed
-            aotr_updated = self.check_aotr_version(install_path)
+            aotr_updated, aotr_rar_path = self.check_aotr_version(install_path)
+            
+            # If we found an existing RAR file, we need to extract it
+            if aotr_updated and aotr_rar_path and os.path.exists(aotr_rar_path):
+                # Check if realms folder already exists
+                realms_folder = os.path.join(install_path, "realms")
+                if not os.path.exists(realms_folder) or not os.path.isdir(realms_folder):
+                    self.status_label.config(text="Extracting existing AOTR RAR file...", fg="blue")
+                    self.update()
+                    try:
+                        # Try to extract the RAR file
+                        with rarfile.RarFile(aotr_rar_path, "r") as rar_ref:
+                            rar_ref.extractall(install_path)
+                            
+                            # If the RAR contains an 'aotr' folder, rename it to 'realms'
+                            extracted_aotr = os.path.join(install_path, "aotr")
+                            if os.path.exists(extracted_aotr):
+                                os.rename(extracted_aotr, realms_folder)
+                            else:
+                                # If no 'aotr' folder in RAR, create realms folder and move contents
+                                os.makedirs(realms_folder, exist_ok=True)
+                                # Move all files from install_path to realms_folder (except the RAR file)
+                                for item in os.listdir(install_path):
+                                    item_path = os.path.join(install_path, item)
+                                    if os.path.isfile(item_path) and item != "aotr.rar":
+                                        shutil.move(item_path, os.path.join(realms_folder, item))
+                                    elif os.path.isdir(item_path) and item != "realms":
+                                        shutil.move(item_path, os.path.join(realms_folder, item))
+                        
+                        self.status_label.config(text="Successfully extracted existing AOTR RAR file", fg="green")
+                        self.update()
+                        
+                    except Exception as extract_error:
+                        print(f"Failed to extract existing RAR file: {extract_error}")
+                        self.status_label.config(text="Failed to extract existing RAR file, continuing...", fg="orange")
+                        self.update()
+                        # Reset aotr_updated since extraction failed
+                        aotr_updated = False
+                        aotr_rar_path = None
+            
+            # If no RAR path was returned but we have an existing RAR file, use it
+            if not aotr_rar_path and os.path.exists(existing_rar_path):
+                aotr_rar_path = existing_rar_path
+                print(f"Found existing AOTR RAR file: {existing_rar_path}")
+            
+            # Check if we need to extract the RAR file (if it exists but realms folder is missing/incomplete)
+            realms_folder = os.path.join(install_path, "realms")
+            if aotr_rar_path and os.path.exists(aotr_rar_path) and (not os.path.exists(realms_folder) or not os.path.isdir(realms_folder)):
+                self.status_label.config(text="Attempting to extract existing AOTR RAR file...", fg="blue")
+                self.update()
+                try:
+                    # Try to extract the RAR file
+                    with rarfile.RarFile(aotr_rar_path, "r") as rar_ref:
+                        rar_ref.extractall(install_path)
+                        
+                        # If the RAR contains an 'aotr' folder, rename it to 'realms'
+                        extracted_aotr = os.path.join(install_path, "aotr")
+                        if os.path.exists(extracted_aotr):
+                            os.rename(extracted_aotr, realms_folder)
+                        else:
+                            # If no 'aotr' folder in RAR, create realms folder and move contents
+                            os.makedirs(realms_folder, exist_ok=True)
+                            # Move all files from install_path to realms_folder (except the RAR file)
+                            for item in os.listdir(install_path):
+                                item_path = os.path.join(install_path, item)
+                                if os.path.isfile(item_path) and item != "aotr.rar":
+                                    shutil.move(item_path, os.path.join(realms_folder, item))
+                                elif os.path.isdir(item_path) and item != "realms":
+                                    shutil.move(item_path, os.path.join(realms_folder, item))
+                    
+                    self.status_label.config(text="Successfully extracted existing AOTR RAR file", fg="green")
+                    self.update()
+                    aotr_updated = True  # Mark as updated since we extracted the RAR
+                    
+                except Exception as extract_error:
+                    print(f"Failed to extract existing RAR file: {extract_error}")
+                    self.status_label.config(text="Failed to extract existing RAR file, continuing...", fg="orange")
+                    self.update()
             
             # Get remote version for comparison
             remote_version = self.get_remote_version()
@@ -639,12 +805,15 @@ class ModLauncher(tk.Tk):
             # Prepare the realms folder based on whether AOTR was updated
             if aotr_updated:
                 # AOTR was downloaded and extracted directly to realms folder
-                realms_folder = os.path.join(install_path, "realms")
                 self.status_label.config(text="AOTR extracted to realms folder...", fg="blue")
                 self.update()
             else:
                 # Use existing aotr folder, copy it to realms
                 realms_folder = self.prepare_realms_folder(install_path)
+            
+            # Ensure realms folder exists before proceeding
+            if not os.path.exists(realms_folder) or not os.path.isdir(realms_folder):
+                raise Exception("Realms folder not found. AOTR extraction failed and no fallback available.")
             
             # Determine if this is a new installation or an update
             version_file = os.path.join(realms_folder, "realms_version.json")
@@ -668,7 +837,7 @@ class ModLauncher(tk.Tk):
             
             # First install base version if needed
             if needs_base_first:
-                self.status_label.config(text=f"Local version {local_version} is older than base version {BASE_MOD_VERSION}. Installing base version first...", fg="blue")
+                self.status_label.config(text=f"Installing base version {BASE_MOD_VERSION}...", fg="blue")
                 self.update()
                 
                 # Download and install base version
@@ -688,22 +857,53 @@ class ModLauncher(tk.Tk):
                     with open(version_file, "w") as file:
                         json.dump({"version": remote_version}, file)
             else:
-                # Choose the appropriate download URL
-                download_url = UPDATE_ZIP_URL if is_update else BASE_MOD_ZIP_URL
-                version_label = "update" if is_update else "base mod"
-                version_number = remote_version if is_update else BASE_MOD_VERSION
-                
-                self.download_and_install_package(realms_folder, download_url, version_label, version_number)
-                
-                # Save the installed version
-                with open(version_file, "w") as file:
-                    json.dump({"version": remote_version if is_update else BASE_MOD_VERSION}, file)
+                # Always download Realms after AOTR (AOTR might not contain the latest Realms)
+                if aotr_updated:
+                    # Choose the appropriate download URL
+                    download_url = UPDATE_ZIP_URL if is_update else BASE_MOD_ZIP_URL
+                    version_label = "update" if is_update else "base mod"
+                    version_number = remote_version if is_update else BASE_MOD_VERSION
+                    
+                    self.download_and_install_package(realms_folder, download_url, version_label, version_number)
+                    
+                    # Save the installed version
+                    with open(version_file, "w") as file:
+                        json.dump({"version": remote_version if is_update else BASE_MOD_VERSION}, file)
+                else:
+                    # Only download Realms if AOTR wasn't updated (since AOTR already contains Realms)
+                    # Choose the appropriate download URL
+                    download_url = UPDATE_ZIP_URL if is_update else BASE_MOD_ZIP_URL
+                    version_label = "update" if is_update else "base mod"
+                    version_number = remote_version if is_update else BASE_MOD_VERSION
+                    
+                    self.download_and_install_package(realms_folder, download_url, version_label, version_number)
+                    
+                    # Save the installed version
+                    with open(version_file, "w") as file:
+                        json.dump({"version": remote_version if is_update else BASE_MOD_VERSION}, file)
+
+            # Delete the AOTR RAR file after realms.zip is successfully extracted
+            if aotr_rar_path and os.path.exists(aotr_rar_path):
+                try:
+                    # Only delete if Realms installation was successful
+                    if os.path.exists(realms_folder) and os.path.isdir(realms_folder):
+                        os.remove(aotr_rar_path)
+                        print(f"Deleted AOTR RAR file: {aotr_rar_path}")
+                    else:
+                        print(f"Keeping AOTR RAR file for recovery: {aotr_rar_path}")
+                except Exception as e:
+                    print(f"Warning: Could not delete AOTR RAR file: {e}")
+            elif aotr_updated:
+                print("AOTR RAR file was already deleted during fallback process")
 
             # Update status and enable uninstall button
             self.status_label.config(text="Mod installed successfully!", fg="green")
             self.uninstall_button.config(state="normal")  # Enable the Uninstall button
             self.progress.pack_forget()  # Hide progress bar
             self.save_folder(install_path, installed=True)
+            
+            # Re-enable folder selection
+            self.folder_button.config(state="normal")
             
             # Apply the language
             self.change_language()
@@ -722,6 +922,9 @@ class ModLauncher(tk.Tk):
             self.progress.pack_forget()  # Hide progress bar
             self.show_download_button()  # Show the Download button again if there's an error
             self.hide_play_button()  # Hide play button on error
+            
+            # Re-enable folder selection on error
+            self.folder_button.config(state="normal")
 
     def download_and_install_package(self, install_path, download_url, version_label, version_number):
         """Helper method to download and install a specific package."""
@@ -802,6 +1005,41 @@ class ModLauncher(tk.Tk):
             print(f"Error fetching remote version: {e}")
         return "0.0.0"
 
+    def get_aotr_version_from_str_file(self, install_path):
+        """Parses AOTR version from the lotr.str file."""
+        try:
+            aotr_data_path = os.path.join(install_path, "aotr", "data", "lotr.str")
+            if not os.path.exists(aotr_data_path):
+                print(f"AOTR data file not found: {aotr_data_path}")
+                return "0.0.0"
+            
+            with open(aotr_data_path, 'r', encoding='utf-8', errors='ignore') as file:
+                lines = file.readlines()
+                
+                # Look for the active (uncommented) version line
+                import re
+                version_pattern = r'"Age of the Ring Version (\d+\.\d+(?:\.\d+)?)"'
+                
+                for line in lines:
+                    line = line.strip()
+                    # Skip commented lines (lines starting with //)
+                    if line.startswith('//'):
+                        continue
+                    
+                    # Look for the version pattern in non-commented lines
+                    match = re.search(version_pattern, line)
+                    if match:
+                        version = match.group(1)
+                        print(f"Found AOTR version in lotr.str: {version}")
+                        return version
+                
+                print("Could not find active AOTR version in lotr.str file")
+                return "0.0.0"
+                    
+        except Exception as e:
+            print(f"Error parsing AOTR version from lotr.str: {e}")
+            return "0.0.0"
+
     def get_aotr_version_info(self):
         """Fetches AOTR version information from the remote version file."""
         try:
@@ -822,32 +1060,44 @@ class ModLauncher(tk.Tk):
             # Get AOTR version info from remote
             aotr_info = self.get_aotr_version_info()
             required_version = aotr_info["required_aotr_version"]
-            current_version = aotr_info["current_aotr_version"]
             
-            # Check if current AOTR version is greater than required
-            if self.is_lower_version(required_version, current_version):
-                self.status_label.config(
-                    text=f"AOTR version {current_version} is newer than required {required_version}. "
-                         f"Downloading AOTR...", fg="blue"
-                )
-                self.update()
-                
-                # Download and install AOTR
-                self.download_and_install_aotr(install_path, current_version)
-                return True
+            # Get current AOTR version from local lotr.str file
+            current_version = self.get_aotr_version_from_str_file(install_path)
+            
+            # Check if current AOTR version is greater than or equal to required
+            if self.is_lower_version(current_version, required_version):
+                # Check if aotr.rar already exists locally
+                existing_rar_path = os.path.join(install_path, "aotr.rar")
+                if os.path.exists(existing_rar_path):
+                    print(f"Found existing AOTR RAR file: {existing_rar_path}")
+                    self.status_label.config(
+                        text="Found existing AOTR RAR file. Extracting...", fg="blue"
+                    )
+                    self.update()
+                    return True, existing_rar_path
+                else:
+                    self.status_label.config(
+                        text=f"Realms in Exile requires AOTR {required_version}. "
+                             f"Current version: {current_version}. Downloading...", fg="blue"
+                    )
+                    self.update()
+                    
+                    # Download and install AOTR
+                    rar_path = self.download_and_install_aotr(install_path, required_version)
+                    return True, rar_path
             else:
                 print(f"AOTR version {current_version} is compatible (required: {required_version})")
-                return False
+                return False, None
                 
         except Exception as e:
             print(f"Error checking AOTR version: {e}")
-            return False
+            return False, None
 
     def download_and_install_aotr(self, install_path, aotr_version):
         """Downloads and installs the AOTR mod."""
         try:
-            # Update status
-            self.status_label.config(text=f"Downloading AOTR version {aotr_version}...", fg="blue")
+            # Update status - keep the informative message from check_aotr_version
+            # Don't overwrite the status message here since it's already set in check_aotr_version
             self.update()
             
             # Create a temporary file name
@@ -878,30 +1128,73 @@ class ModLauncher(tk.Tk):
                 self.update()
                 shutil.rmtree(realms_folder)
 
-            # Extract the RAR file directly to realms folder
-            with rarfile.RarFile(rar_path, "r") as rar_ref:
-                rar_ref.extractall(install_path)
+            # Try to extract the RAR file
+            try:
+                with rarfile.RarFile(rar_path, "r") as rar_ref:
+                    rar_ref.extractall(install_path)
+                    
+                    # If the RAR contains an 'aotr' folder, rename it to 'realms'
+                    extracted_aotr = os.path.join(install_path, "aotr")
+                    if os.path.exists(extracted_aotr):
+                        os.rename(extracted_aotr, realms_folder)
+                    else:
+                        # If no 'aotr' folder in RAR, create realms folder and move contents
+                        os.makedirs(realms_folder, exist_ok=True)
+                        # Move all files from install_path to realms_folder (except the RAR file)
+                        for item in os.listdir(install_path):
+                            item_path = os.path.join(install_path, item)
+                            if os.path.isfile(item_path) and item != "aotr.rar":
+                                shutil.move(item_path, os.path.join(realms_folder, item))
+                            elif os.path.isdir(item_path) and item != "realms":
+                                shutil.move(item_path, os.path.join(realms_folder, item))
                 
-                # If the RAR contains an 'aotr' folder, rename it to 'realms'
-                extracted_aotr = os.path.join(install_path, "aotr")
-                if os.path.exists(extracted_aotr):
-                    os.rename(extracted_aotr, realms_folder)
+                self.status_label.config(text=f"AOTR version {aotr_version} extracted successfully", fg="green")
+                self.update()
+                
+            except Exception as rar_error:
+                print(f"RAR extraction failed: {rar_error}")
+                self.status_label.config(text="RAR extraction failed, checking AOTR version...", fg="orange")
+                self.update()
+                
+                # Show a helpful message about installing RAR tools
+                if "Cannot find working tool" in str(rar_error):
+                    print("Note: To extract RAR files, install a RAR extraction tool like:")
+                    print("  - WinRAR: https://www.win-rar.com/")
+                    print("  - 7-Zip: https://7-zip.org/")
+                    print("  - Or use the command line: choco install unrar")
+                
+                # Check if we should use existing AOTR folder based on version requirements
+                aotr_info = self.get_aotr_version_info()
+                required_version = aotr_info["required_aotr_version"]
+                current_version = self.get_aotr_version_from_str_file(install_path)
+                
+                # Only use existing AOTR if current version is compatible (not lower than required)
+                if self.is_lower_version(current_version, required_version):
+                    # Current AOTR version is lower than required, don't use it
+                    raise Exception(f"RAR extraction failed. Current AOTR version ({current_version}) is lower than required ({required_version}). Please install a RAR extraction tool to proceed.")
                 else:
-                    # If no 'aotr' folder in RAR, create realms folder and move contents
-                    os.makedirs(realms_folder, exist_ok=True)
-                    # Move all files from install_path to realms_folder (except the RAR file)
-                    for item in os.listdir(install_path):
-                        item_path = os.path.join(install_path, item)
-                        if os.path.isfile(item_path) and item != "aotr.rar":
-                            shutil.move(item_path, os.path.join(realms_folder, item))
-                        elif os.path.isdir(item_path) and item != "realms":
-                            shutil.move(item_path, os.path.join(realms_folder, item))
-
-            # Remove the downloaded RAR file
-            os.remove(rar_path)
+                    # Current AOTR version is compatible, use existing folder as fallback
+                    existing_aotr = os.path.join(install_path, "aotr")
+                    if os.path.exists(existing_aotr):
+                        shutil.copytree(existing_aotr, realms_folder)
+                        self.status_label.config(text="Using existing AOTR folder as fallback", fg="green")
+                        self.update()
+                    else:
+                        raise Exception("RAR extraction failed and no existing AOTR folder found")
+                    
+                    # Delete the downloaded RAR file since we couldn't use it
+                    if os.path.exists(rar_path):
+                        os.remove(rar_path)
+                    return None  # No RAR file to track since we deleted it
+            
+            # Don't delete the RAR file here - return the path instead
+            # os.remove(rar_path)  # Commented out - will be deleted later
             
             self.status_label.config(text=f"AOTR version {aotr_version} installed successfully", fg="green")
             self.update()
+            
+            # Return the RAR file path so it can be deleted after realms.zip extraction
+            return rar_path
             
         except Exception as e:
             print(f"Error downloading AOTR: {e}")
@@ -947,7 +1240,7 @@ class ModLauncher(tk.Tk):
 
         if messagebox.askyesno(
             "Confirm Uninstall",
-            "Do you really want to uninstall the Realms in Exile mod? This will delete only the realms folder."
+            "Do you really want to uninstall the Realms in Exile mod? This will not delete your Age of the Ring mod."
         ):
             try:
                 # Only delete the realms folder, not the entire installation directory
@@ -1089,13 +1382,17 @@ class ModLauncher(tk.Tk):
             if getattr(sys, 'frozen', False):
                 # Running in a PyInstaller bundle
                 exe_dir = os.path.dirname(sys.executable)
+                current_exe = sys.executable
             else:
                 # Running as a normal Python script
                 exe_dir = os.path.dirname(os.path.abspath(__file__))
+                current_exe = os.path.abspath(__file__)
 
             zip_filename = "realms_launcher.zip"
             zip_path = os.path.join(exe_dir, zip_filename)
+            update_script_path = os.path.join(exe_dir, "update_launcher.py")
 
+            # Download the launcher update
             response = requests.get(LAUNCHER_ZIP_URL, stream=True)
             if response.status_code != 200:
                 raise Exception(f"Unexpected status code: {response.status_code}")
@@ -1113,19 +1410,127 @@ class ModLauncher(tk.Tk):
                             self.progress["value"] = (downloaded_size / total_size) * 100
                         self.update()
 
+            # Create the update script
+            self.create_update_script(update_script_path, exe_dir, zip_path, current_exe)
+
+            # Show success message
             messagebox.showinfo(
                 "Launcher Update",
-                f"The updated launcher has been downloaded to:\n\n{zip_path}\n\nPlease extract it manually."
+                "The launcher update has been downloaded.\n\n"
+                "The launcher will now close and automatically update itself.\n"
+                "Please wait for the update to complete."
             )
 
-            # Open the folder where the file was saved
-            os.startfile(exe_dir)
-
+            # Start the update script and exit
+            subprocess.Popen([sys.executable, update_script_path], 
+                           creationflags=subprocess.CREATE_NEW_CONSOLE)
+            
             # Exit the current launcher
             self.quit()
 
         except Exception as e:
             messagebox.showerror("Update Failed", f"Failed to update the launcher: {e}")
+
+    def create_update_script(self, script_path, exe_dir, zip_path, current_exe):
+        """Creates a Python script that will handle the launcher update."""
+        script_content = f'''import os
+import sys
+import time
+import zipfile
+import shutil
+import subprocess
+import threading
+
+def wait_for_process_to_exit(process_name, timeout=30):
+    """Wait for a process to exit."""
+    import psutil
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        for proc in psutil.process_iter(['pid', 'name']):
+            try:
+                if process_name.lower() in proc.info['name'].lower():
+                    return False  # Process still running
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        time.sleep(0.5)
+    return True  # Process exited or timeout
+
+def update_launcher():
+    """Update the launcher by extracting the zip and replacing the executable."""
+    try:
+        # Wait a moment for the main launcher to close
+        time.sleep(2)
+        
+        # Check if the main launcher process has exited
+        if getattr(sys, 'frozen', False):
+            process_name = "realms_launcher.exe"
+        else:
+            process_name = "python.exe"
+        
+        # Wait for the main launcher to exit
+        if not wait_for_process_to_exit(process_name):
+            print("Main launcher process still running, waiting...")
+            time.sleep(5)
+        
+        # Extract the zip file
+        print("Extracting launcher update...")
+        with zipfile.ZipFile("{zip_path}", 'r') as zip_ref:
+            zip_ref.extractall("{exe_dir}")
+        
+        # Find the new executable
+        new_exe = None
+        for root, dirs, files in os.walk("{exe_dir}"):
+            for file in files:
+                if file.endswith('.exe') and 'realms_launcher' in file.lower():
+                    new_exe = os.path.join(root, file)
+                    break
+            if new_exe:
+                break
+        
+        if new_exe and new_exe != "{current_exe}":
+            # Replace the old executable with the new one
+            print(f"Replacing launcher: {{new_exe}}")
+            
+            # If running as frozen executable, replace it
+            if getattr(sys, 'frozen', False):
+                # Create a backup of the old executable
+                backup_path = "{current_exe}.backup"
+                if os.path.exists(backup_path):
+                    os.remove(backup_path)
+                shutil.copy2("{current_exe}", backup_path)
+                
+                # Replace the executable
+                os.remove("{current_exe}")
+                shutil.move(new_exe, "{current_exe}")
+                
+                # Clean up the backup after successful replacement
+                if os.path.exists("{current_exe}"):
+                    os.remove(backup_path)
+            
+            # Clean up the zip file
+            if os.path.exists("{zip_path}"):
+                os.remove("{zip_path}")
+            
+            print("Launcher update completed successfully!")
+            
+            # Start the new launcher
+            print("Starting updated launcher...")
+            subprocess.Popen(["{current_exe}"], 
+                           creationflags=subprocess.CREATE_NEW_CONSOLE)
+            
+        else:
+            print("Could not find new launcher executable")
+            
+    except Exception as e:
+        print(f"Error during launcher update: {{e}}")
+        input("Press Enter to exit...")
+
+if __name__ == "__main__":
+    update_launcher()
+'''
+        
+        with open(script_path, 'w') as f:
+            f.write(script_content)
 
 if __name__ == "__main__":
     app = ModLauncher()
