@@ -25,7 +25,7 @@ UPDATE_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_update.
 AOTR_RAR_URL = "https://f005.backblazeb2.com/file/RealmsInExile/aotr.rar"  # AOTR download
 LAUNCHER_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_launcher.zip"  # Launcher update package
 NEWS_URL = "https://raw.githubusercontent.com/hansnery/Realms-Launcher/refs/heads/main/news.html"
-LAUNCHER_VERSION = "1.0.4"  # Updated launcher version
+LAUNCHER_VERSION = "1.0.5"  # Updated launcher version
 REG_PATH = r"SOFTWARE\REALMS_Launcher"
 
 
@@ -803,19 +803,6 @@ class ModLauncher(tk.Tk):
             remote_version = self.get_remote_version()
             
             # Prepare the realms folder based on whether AOTR was updated
-            if aotr_updated:
-                # AOTR was downloaded and extracted directly to realms folder
-                self.status_label.config(text="AOTR extracted to realms folder...", fg="blue")
-                self.update()
-            else:
-                # Use existing aotr folder, copy it to realms
-                realms_folder = self.prepare_realms_folder(install_path)
-            
-            # Ensure realms folder exists before proceeding
-            if not os.path.exists(realms_folder) or not os.path.isdir(realms_folder):
-                raise Exception("Realms folder not found. AOTR extraction failed and no fallback available.")
-            
-            # Determine if this is a new installation or an update
             version_file = os.path.join(realms_folder, "realms_version.json")
             is_update = False
             needs_base_first = False
@@ -828,12 +815,40 @@ class ModLauncher(tk.Tk):
                         if content:
                             local_version = json.loads(content).get("version", "unknown")
                             is_update = True
-                            
                             # Check if local version is lower than base version
                             if self.is_lower_version(local_version, BASE_MOD_VERSION):
                                 needs_base_first = True
                 except:
                     is_update = False
+
+            # Only prepare realms folder (copy from aotr) if this is a base install
+            if not os.path.exists(version_file) or needs_base_first:
+                if not aotr_updated:
+                    realms_folder = self.prepare_realms_folder(install_path)
+            # For updates, do not recreate realms folder, just use the existing one
+            # Ensure realms folder exists before proceeding
+            if not os.path.exists(realms_folder) or not os.path.isdir(realms_folder):
+                raise Exception("Realms folder not found. AOTR extraction failed and no fallback available.")
+            
+            # Determine if this is a new installation or an update
+            # version_file = os.path.join(realms_folder, "realms_version.json")
+            # is_update = False
+            # needs_base_first = False
+            # local_version = "not installed"
+            
+            # if os.path.exists(version_file):
+            #     try:
+            #         with open(version_file, "r") as file:
+            #             content = file.read().strip()
+            #             if content:
+            #                 local_version = json.loads(content).get("version", "unknown")
+            #                 is_update = True
+                        
+            #                 # Check if local version is lower than base version
+            #                 if self.is_lower_version(local_version, BASE_MOD_VERSION):
+            #                     needs_base_first = True
+            #     except:
+            #         is_update = False
             
             # First install base version if needed
             if needs_base_first:
