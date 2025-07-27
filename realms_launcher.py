@@ -1365,47 +1365,31 @@ class ModLauncher(tk.Tk):
                     print("New launcher version detected!")
                     user_choice = messagebox.askyesno(
                         "Launcher Update Available",
-                        f"A new launcher version ({latest_launcher_version}) is available. Update now?"
+                        f"A new launcher version ({latest_launcher_version}) is available. Download update?"
                     )
                     if user_choice:
                         self.update_launcher()
-                    else:
-                        self.destroy()  # Close the application if the user clicks "No"
+                    # Do not close the launcher automatically
                 else:
                     print(f"Launcher is up-to-date ({LAUNCHER_VERSION}).")
             else:
                 messagebox.showerror("Update Check Failed", "Failed to fetch version.json.")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to check for launcher updates: {e}")
-            self.destroy()  # Ensure the application closes in case of an error
-
-    def is_newer_version(self, current_version, latest_version):
-        """Compares two version strings numerically."""
-        try:
-            current_parts = list(map(int, current_version.split(".")))
-            latest_parts = list(map(int, latest_version.split(".")))
-            print(f"Comparing versions: {current_parts} < {latest_parts}")
-            return latest_parts > current_parts
-        except ValueError:
-            print("Error parsing version strings for comparison.")
-            return False
 
     def update_launcher(self):
-        """Downloads and installs the updated launcher."""
+        """Downloads the updated launcher ZIP and tells the user to extract it manually."""
         try:
             # Determine the folder where this executable or script is located
             if getattr(sys, 'frozen', False):
                 # Running in a PyInstaller bundle
                 exe_dir = os.path.dirname(sys.executable)
-                current_exe = sys.executable
             else:
                 # Running as a normal Python script
                 exe_dir = os.path.dirname(os.path.abspath(__file__))
-                current_exe = os.path.abspath(__file__)
 
             zip_filename = "realms_launcher.zip"
             zip_path = os.path.join(exe_dir, zip_filename)
-            update_script_path = os.path.join(exe_dir, "update_launcher.py")
 
             # Download the launcher update
             response = requests.get(LAUNCHER_ZIP_URL, stream=True)
@@ -1425,127 +1409,26 @@ class ModLauncher(tk.Tk):
                             self.progress["value"] = (downloaded_size / total_size) * 100
                         self.update()
 
-            # Create the update script
-            self.create_update_script(update_script_path, exe_dir, zip_path, current_exe)
-
-            # Show success message
+            # Show message to user to extract manually
             messagebox.showinfo(
-                "Launcher Update",
-                "The launcher update has been downloaded.\n\n"
-                "The launcher will now close and automatically update itself.\n"
-                "Please wait for the update to complete."
+                "Launcher Update Downloaded",
+                f"The launcher update has been downloaded as '{zip_filename}' in the launcher folder.\n\n"
+                "Please close the launcher and extract the contents of this ZIP file over your current launcher files to update."
             )
 
-            # Start the update script and exit
-            subprocess.Popen([sys.executable, update_script_path], 
-                           creationflags=subprocess.CREATE_NEW_CONSOLE)
-            
-            # Exit the current launcher
-            self.quit()
-
         except Exception as e:
-            messagebox.showerror("Update Failed", f"Failed to update the launcher: {e}")
+            messagebox.showerror("Update Failed", f"Failed to download the launcher update: {e}")
 
-    def create_update_script(self, script_path, exe_dir, zip_path, current_exe):
-        """Creates a Python script that will handle the launcher update."""
-        script_content = f'''import os
-import sys
-import time
-import zipfile
-import shutil
-import subprocess
-import threading
-
-def wait_for_process_to_exit(process_name, timeout=30):
-    """Wait for a process to exit."""
-    import psutil
-    start_time = time.time()
-    while time.time() - start_time < timeout:
-        for proc in psutil.process_iter(['pid', 'name']):
-            try:
-                if process_name.lower() in proc.info['name'].lower():
-                    return False  # Process still running
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-        time.sleep(0.5)
-    return True  # Process exited or timeout
-
-def update_launcher():
-    """Update the launcher by extracting the zip and replacing the executable."""
-    try:
-        # Wait a moment for the main launcher to close
-        time.sleep(2)
-        
-        # Check if the main launcher process has exited
-        if getattr(sys, 'frozen', False):
-            process_name = "realms_launcher.exe"
-        else:
-            process_name = "python.exe"
-        
-        # Wait for the main launcher to exit
-        if not wait_for_process_to_exit(process_name):
-            print("Main launcher process still running, waiting...")
-            time.sleep(5)
-        
-        # Extract the zip file
-        print("Extracting launcher update...")
-        with zipfile.ZipFile("{zip_path}", 'r') as zip_ref:
-            zip_ref.extractall("{exe_dir}")
-        
-        # Find the new executable
-        new_exe = None
-        for root, dirs, files in os.walk("{exe_dir}"):
-            for file in files:
-                if file.endswith('.exe') and 'realms_launcher' in file.lower():
-                    new_exe = os.path.join(root, file)
-                    break
-            if new_exe:
-                break
-        
-        if new_exe and new_exe != "{current_exe}":
-            # Replace the old executable with the new one
-            print(f"Replacing launcher: {{new_exe}}")
-            
-            # If running as frozen executable, replace it
-            if getattr(sys, 'frozen', False):
-                # Create a backup of the old executable
-                backup_path = "{current_exe}.backup"
-                if os.path.exists(backup_path):
-                    os.remove(backup_path)
-                shutil.copy2("{current_exe}", backup_path)
-                
-                # Replace the executable
-                os.remove("{current_exe}")
-                shutil.move(new_exe, "{current_exe}")
-                
-                # Clean up the backup after successful replacement
-                if os.path.exists("{current_exe}"):
-                    os.remove(backup_path)
-            
-            # Clean up the zip file
-            if os.path.exists("{zip_path}"):
-                os.remove("{zip_path}")
-            
-            print("Launcher update completed successfully!")
-            
-            # Start the new launcher
-            print("Starting updated launcher...")
-            subprocess.Popen(["{current_exe}"], 
-                           creationflags=subprocess.CREATE_NEW_CONSOLE)
-            
-        else:
-            print("Could not find new launcher executable")
-            
-    except Exception as e:
-        print(f"Error during launcher update: {{e}}")
-        input("Press Enter to exit...")
-
-if __name__ == "__main__":
-    update_launcher()
-'''
-        
-        with open(script_path, 'w') as f:
-            f.write(script_content)
+    def is_newer_version(self, current_version, latest_version):
+        """Compares two version strings numerically."""
+        try:
+            current_parts = list(map(int, current_version.split(".")))
+            latest_parts = list(map(int, latest_version.split(".")))
+            print(f"Comparing versions: {current_parts} < {latest_parts}")
+            return latest_parts > current_parts
+        except ValueError:
+            print("Error parsing version strings for comparison.")
+            return False
 
 if __name__ == "__main__":
     app = ModLauncher()
