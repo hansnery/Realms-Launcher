@@ -971,10 +971,60 @@ class ModLauncher(tk.Tk):
         self.status_label.config(text=f"Installing {version_label}...", fg="blue")
         self.update()
 
-        # Extract the ZIP file to the parent directory (AgeoftheRing root)
-        parent_dir = os.path.dirname(install_path)
-        with ZipFile(zip_path, "r") as zip_ref:
-            zip_ref.extractall(parent_dir)
+        # Extract the ZIP file to a temporary location to handle nested structure
+        temp_dir = os.path.join(parent_dir, "temp_extraction")
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        os.makedirs(temp_dir)
+        
+        try:
+            # Extract the ZIP file to temporary location
+            with ZipFile(zip_path, "r") as zip_ref:
+                zip_ref.extractall(temp_dir)
+            
+            # Find the realms folder in the extracted structure
+            realms_folder_found = None
+            for root, dirs, files in os.walk(temp_dir):
+                if "realms" in dirs:
+                    realms_folder_found = os.path.join(root, "realms")
+                    break
+            
+            if realms_folder_found:
+                # Ensure the target directory exists
+                if not os.path.exists(install_path):
+                    os.makedirs(install_path)
+                
+                # Extract files directly to the target location for proper overwrite
+                self.status_label.config(text="Installing realms folder...", fg="blue")
+                self.update()
+                
+                # Extract each file from the found realms folder to the target location
+                for root, dirs, files in os.walk(realms_folder_found):
+                    # Calculate the relative path from the realms folder
+                    rel_path = os.path.relpath(root, realms_folder_found)
+                    target_dir = os.path.join(install_path, rel_path)
+                    
+                    # Create target directory if it doesn't exist
+                    if not os.path.exists(target_dir):
+                        os.makedirs(target_dir)
+                    
+                    # Copy files to target location (this will overwrite existing files)
+                    for file in files:
+                        src_file = os.path.join(root, file)
+                        dst_file = os.path.join(target_dir, file)
+                        shutil.copy2(src_file, dst_file)
+                
+            else:
+                # Fallback: extract directly to parent directory (old behavior)
+                self.status_label.config(text="Using fallback extraction method...", fg="blue")
+                self.update()
+                with ZipFile(zip_path, "r") as zip_ref:
+                    zip_ref.extractall(parent_dir)
+        
+        finally:
+            # Clean up temporary directory
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
 
         # Remove the downloaded ZIP file
         os.remove(zip_path)
