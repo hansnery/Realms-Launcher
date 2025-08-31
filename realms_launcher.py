@@ -25,7 +25,7 @@ UPDATE_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_update.
 AOTR_RAR_URL = "https://f005.backblazeb2.com/file/RealmsInExile/aotr.rar"  # AOTR download
 LAUNCHER_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_launcher.zip"  # Launcher update package
 NEWS_URL = "https://raw.githubusercontent.com/hansnery/Realms-Launcher/refs/heads/main/news.html"
-LAUNCHER_VERSION = "1.0.5"  # Updated launcher version
+LAUNCHER_VERSION = "1.0.6"  # Updated launcher version
 REG_PATH = r"SOFTWARE\REALMS_Launcher"
 
 
@@ -1282,6 +1282,19 @@ class ModLauncher(tk.Tk):
 
             # Get the mod folder (now the realms folder)
             mod_folder = os.path.join(install_path, "realms")
+
+            # Copy dxvk.conf from realms/dxvk/ to rotwk/ if it exists
+            dxvk_source = os.path.join(mod_folder, "dxvk", "dxvk.conf")
+            dxvk_dest = os.path.join(rotwk_folder, "dxvk.conf")
+            
+            if os.path.exists(dxvk_source):
+                try:
+                    shutil.copy2(dxvk_source, dxvk_dest)
+                    print(f"Copied dxvk.conf from {dxvk_source} to {dxvk_dest}")
+                except Exception as e:
+                    print(f"Warning: Failed to copy dxvk.conf: {e}")
+            else:
+                print("dxvk.conf not found in realms/dxvk/, skipping copy")
 
             # Create the command line with mod parameter
             cmd = f'"{game_executable}" -mod "{mod_folder}"'
