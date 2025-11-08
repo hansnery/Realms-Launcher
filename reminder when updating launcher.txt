@@ -1,1 +1,0 @@
-rename realms_launcher.exe to realms_launcher_new.exe and upload it to the bucket inside a launcher_update.zip

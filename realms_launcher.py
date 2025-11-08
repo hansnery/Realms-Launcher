@@ -11,24 +11,36 @@ from PIL import Image, ImageTk
 import winreg
 import re
 from tkhtmlview import HTMLLabel
-import shutil  # Import shutil for removing directories
-import subprocess  # Import subprocess for launching the game
-import rarfile  # Import rarfile for RAR extraction
-import ctypes  # Import ctypes for admin privileges check
-import psutil  # Import psutil for process management
+import shutil  # removing directories / copying files
+import subprocess  # launching the game
+import rarfile  # RAR extraction
+import ctypes  # admin privileges check
+import tempfile
+import pathlib
 
+# =========================
+# Config flags
+# =========================
+# If True, the updater will run elevated (UAC prompt) to write into protected locations.
+USE_ELEVATED_UPDATER = False
+
+# =========================
 # Constants
-MOD_INFO_URL = "https://realmsinexile.s3.us-east-005.backblazeb2.com/version.json"
+# =========================
+MOD_INFO_URL = "https://realmsinexile.s3.us-east-005.backblazeb2.com/version_beta.json"
 BASE_MOD_VERSION = "0.8.0"  # Base version of the mod
 BASE_MOD_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms.zip"  # Base mod download
 UPDATE_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_update.zip"  # Update package
 AOTR_RAR_URL = "https://f005.backblazeb2.com/file/RealmsInExile/aotr.rar"  # AOTR download
-LAUNCHER_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_launcher.zip"  # Launcher update package
+LAUNCHER_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_launcher_beta.zip"  # Launcher update package
 NEWS_URL = "https://raw.githubusercontent.com/hansnery/Realms-Launcher/refs/heads/main/news.html"
 LAUNCHER_VERSION = "1.0.6"  # Updated launcher version
 REG_PATH = r"SOFTWARE\REALMS_Launcher"
 
 
+# =========================
+# Admin helpers
+# =========================
 def is_admin():
     """Check if the application is running with admin privileges."""
     try:
@@ -46,7 +58,7 @@ def run_as_admin():
         else:
             # Running as a normal Python script
             script = sys.argv[0]
-        
+
         ctypes.windll.shell32.ShellExecuteW(
             None, "runas", sys.executable, script, None, 1
         )
@@ -54,6 +66,169 @@ def run_as_admin():
     except Exception as e:
         print(f"Error running as admin: {e}")
         return False
+
+
+# =========================
+# Self-update helpers (module-level)
+# =========================
+def _is_frozen():
+    return getattr(sys, 'frozen', False)
+
+
+def _launcher_dir() -> str:
+    # Where the launcher lives (EXE dir for frozen, script dir for dev)
+    return os.path.dirname(sys.executable) if _is_frozen() else os.path.dirname(os.path.abspath(__file__))
+
+
+def _launcher_path() -> str:
+    # Path to the running launcher (EXE or script)
+    return sys.executable if _is_frozen() else os.path.abspath(sys.argv[0])
+
+
+def _python_cmd() -> list:
+    # How to run a .py updater if not frozen
+    return [sys.executable]
+
+
+def _start_detached(cmd: list):
+    # Start a detached process on Windows
+    DETACHED_PROCESS = 0x00000008
+    CREATE_NEW_PROCESS_GROUP = 0x00000200
+    subprocess.Popen(
+        cmd,
+        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+        close_fds=True
+    )
+
+
+def _write_updater_ps1(ps1_path: str):
+    """
+    PowerShell updater with detailed logging:
+      - Waits for main process (PID) to exit
+      - Mirrors staged -> target via robocopy with retries
+      - Logs every step to LogPath
+      - Cleans up staged dir
+      - Relaunches the launcher with proper working directory
+    """
+    ps1 = r'''
+param(
+    [string]$TargetDir,
+    [string]$StagedDir,
+    [int]$MainPid,
+    [string]$RelaunchPath,
+    [string]$RelaunchArgs,
+    [string]$RelaunchCwd,
+    [string]$LogPath
+)
+
+# Ensure parent folder exists (esp. if redirected elsewhere)
+try {
+    $parent = Split-Path -Parent $LogPath
+    if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
+} catch {}
+
+# --- Logging helper ---
+function Write-Log {
+    param([string]$msg)
+    $timestamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss.fff")
+    try {
+        Add-Content -LiteralPath $LogPath -Value "[$timestamp] $msg"
+    } catch {}
+}
+
+# Ensure log file exists
+try {
+    New-Item -ItemType File -Force -Path $LogPath | Out-Null
+} catch {}
+
+Write-Log "==== Updater started ===="
+Write-Log "TargetDir=$TargetDir"
+Write-Log "StagedDir=$StagedDir"
+Write-Log "MainPid=$MainPid"
+Write-Log "RelaunchPath=$RelaunchPath"
+Write-Log "RelaunchArgs=$RelaunchArgs"
+Write-Log "RelaunchCwd=$RelaunchCwd"
+Write-Log "PSVersion=$($PSVersionTable.PSVersion)"
+
+# Wait for main process to exit (best effort)
+if ($MainPid -gt 0) {
+    try {
+        Write-Log "Waiting for PID $MainPid to exit..."
+        Wait-Process -Id $MainPid -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 500
+    } catch {
+        Write-Log "Wait-Process threw: $($_.Exception.Message)"
+    }
+}
+
+# Copy loop (robust against transient locks)
+function Copy-With-Retry {
+    param([string]$src, [string]$dst)
+    $max = 10
+    for ($i=1; $i -le $max; $i++) {
+        try {
+            if (Test-Path -LiteralPath $src) {
+                if (-not (Test-Path -LiteralPath $dst)) {
+                    try { New-Item -ItemType Directory -Force -Path $dst | Out-Null } catch {}
+                }
+                Write-Log "robocopy try #$i"
+                # /MIR mirror tree, /R:2 /W:0 quick retries, /NFL/NDL quiets file/dir lists
+                robocopy "$src" "$dst" /MIR /R:2 /W:0 /NFL /NDL /NJH /NJS /NP
+                $code = $LASTEXITCODE
+                Write-Log "robocopy exit code = $code"
+                # Robocopy success or benign codes: 0,1,2,3,4,5,6,7
+                if ($code -le 7) { return $true }
+            } else {
+                Write-Log "Staged path not found"
+                return $false
+            }
+        } catch {
+            Write-Log "Copy exception: $($_.Exception.Message)"
+        }
+        Start-Sleep -Milliseconds (200 * $i)
+    }
+    return $false
+}
+
+$ok = Copy-With-Retry -src $StagedDir -dst $TargetDir
+Write-Log "Copy result = $ok"
+
+# Cleanup staged folder (best effort)
+try {
+    if (Test-Path -LiteralPath $StagedDir) {
+        Write-Log "Removing staged dir..."
+        Remove-Item -LiteralPath $StagedDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+} catch {
+    Write-Log "Cleanup exception: $($_.Exception.Message)"
+}
+
+# Relaunch if requested
+if ($ok -and $RelaunchPath) {
+    try {
+        Write-Log "Relaunching..."
+        if (Test-Path -LiteralPath $RelaunchPath) {
+            if ($RelaunchArgs) {
+                Start-Process -FilePath $RelaunchPath -ArgumentList $RelaunchArgs -WorkingDirectory $RelaunchCwd | Out-Null
+            } else {
+                Start-Process -FilePath $RelaunchPath -WorkingDirectory $RelaunchCwd | Out-Null
+            }
+        } else {
+            # If path isn't a file, attempt to run it as a command line
+            Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile","-WindowStyle","Hidden","-Command",$RelaunchPath -WorkingDirectory $RelaunchCwd | Out-Null
+        }
+    } catch {
+        Write-Log "Relaunch exception: $($_.Exception.Message)"
+    }
+}
+
+Write-Log "==== Updater finished ===="
+exit 0
+'''
+    with open(ps1_path, 'w', encoding='utf-8') as f:
+        f.write(ps1.strip())
 
 
 class Tooltip:
@@ -94,12 +269,12 @@ class Tooltip:
 class ModLauncher(tk.Tk):
     def __init__(self):
         super().__init__()
-        
+
         # Check for admin privileges on startup only if running as compiled exe
         is_frozen = getattr(sys, 'frozen', False)
         if is_frozen and not is_admin():
             self.check_admin_privileges()
-        
+
         self.title("Age of the Ring: Realms in Exile Launcher")
         self.geometry("600x520")
         self.resizable(False, False)
@@ -108,7 +283,7 @@ class ModLauncher(tk.Tk):
         # Selected folder and mod state
         self.install_folder = tk.StringVar()
         self.is_installed = False
-        
+
         # Language selection
         self.language = tk.StringVar()
         self.language.set("english")  # Default language
@@ -125,20 +300,78 @@ class ModLauncher(tk.Tk):
         # Check for updates for the launcher
         self.check_launcher_update()
 
+    # ============ Auto-update (launcher) additions ============
+    def _download_and_stage_zip(self, url: str) -> str:
+        """
+        Downloads and extracts the update ZIP to a temp staging folder.
+        Returns the staging folder path that contains the new launcher files.
+        """
+        temp_root = tempfile.mkdtemp(prefix="realms_launcher_update_")
+        zip_path = os.path.join(temp_root, "update.zip")
+
+        # Download
+        self.status_label.config(text="Downloading launcher update...", fg="blue")
+        self.progress.pack()
+        self.progress["value"] = 0
+        self.update()
+
+        r = requests.get(url, stream=True)
+        if r.status_code != 200:
+            raise Exception(f"Unexpected status code: {r.status_code}")
+        total = int(r.headers.get("content-length", 0))
+        got = 0
+        with open(zip_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1 << 14):
+                if chunk:
+                    f.write(chunk)
+                    got += len(chunk)
+                    if total:
+                        self.progress["value"] = got * 100 / total
+                    self.update()
+
+        # Extract
+        self.status_label.config(text="Staging launcher update...", fg="blue")
+        self.update()
+        staged_dir = os.path.join(temp_root, "staged")
+        os.makedirs(staged_dir, exist_ok=True)
+        with ZipFile(zip_path, "r") as zf:
+            zf.extractall(staged_dir)
+
+        # If the zip contains a top-level folder, descend into it so we copy *its* contents
+        entries = list(pathlib.Path(staged_dir).iterdir())
+        if len(entries) == 1 and entries[0].is_dir():
+            staged_dir = str(entries[0])
+
+        # After extraction:
+        try:
+            with open(os.path.join(staged_dir, "_staged_ok.txt"), "w", encoding="utf-8") as f:
+                f.write(f"staged at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        except Exception:
+            pass
+
+        return staged_dir
+
+    def _quit_for_update(self):
+        # Stop Tk event loop and exit so updater can replace files
+        try:
+            self.destroy()
+        except:
+            pass
+        os._exit(0)
+
+    # ==========================================================
+
     def check_admin_privileges(self):
         """Check if running with admin privileges and prompt user if not."""
         if not is_admin():
             result = messagebox.askyesno(
                 "Admin Privileges Required",
-                "This launcher requires administrator privileges to function "
-                "properly.\n\n"
-                "Would you like to restart the application with admin "
-                "privileges?\n\n"
-                "Note: This will close the current instance and restart with "
-                "elevated permissions.",
+                "This launcher requires administrator privileges to function properly.\n\n"
+                "Would you like to restart the application with admin privileges?\n\n"
+                "Note: This will close the current instance and restart with elevated permissions.",
                 icon="warning"
             )
-            
+
             if result:
                 # Try to restart with admin privileges
                 if run_as_admin():
@@ -151,16 +384,14 @@ class ModLauncher(tk.Tk):
                         "Failed to restart with admin privileges.\n"
                         "Please run the launcher as administrator manually."
                     )
-                    # Continue without admin privileges 
-                    # (user chose to proceed anyway)
+                    # Continue without admin privileges
             else:
                 # User chose not to restart, show warning but continue
                 messagebox.showwarning(
                     "Limited Functionality",
                     "The launcher will continue without admin privileges.\n"
                     "Some features may not work correctly.\n\n"
-                    "To ensure full functionality, please run the launcher as "
-                    "administrator."
+                    "To ensure full functionality, please run the launcher as administrator."
                 )
 
     def resource_path(self, relative_path):
@@ -196,16 +427,14 @@ class ModLauncher(tk.Tk):
         Tooltip(self.uninstall_button, "Remove the mod and delete all its files and folders.")
 
         self.create_shortcut_button = tk.Button(self.top_frame, text="Create Shortcut", command=self.create_shortcut, state="disabled")
-        # self.create_shortcut_button.pack(side="left", padx=10, pady=5)
-        # Tooltip(self.create_shortcut_button, "Create a desktop shortcut to launch the mod.")
-        
+
         # Language dropdown
         language_frame = tk.Frame(self.top_frame)
         language_frame.pack(side="left", padx=10, pady=5)
-        
+
         language_label = tk.Label(language_frame, text="Language:")
         language_label.pack(side="left")
-        
+
         self.language_dropdown = ttk.Combobox(language_frame, textvariable=self.language, state="readonly", width=15)
         self.language_dropdown["values"] = ["English", "Portuguese (BR)"]
         self.language_dropdown.current(0)  # Set default to English
@@ -235,19 +464,17 @@ class ModLauncher(tk.Tk):
         # Button frame for Play and Download buttons
         self.button_frame = tk.Frame(self.bottom_frame)
         self.button_frame.pack(pady=5)
-        
+
         # Play Button (initially hidden)
         self.play_button = tk.Button(
             self.button_frame,
             text="Play Mod",
-            #bg="green",
-            # fg="white",
             font=("Arial", 10, "bold"),
             width=15,
             height=2,
             command=self.launch_game
         )
-        
+
         # Download Button
         self.download_button = tk.Button(
             self.button_frame,
@@ -269,7 +496,7 @@ class ModLauncher(tk.Tk):
 
         # Bottom info frame (folder path on the left, version on the right)
         self.bottom_info_frame = tk.Frame(self)
-        self.bottom_info_frame.pack(side="bottom", fill="x", padx=10, pady=10)  # Increase pady from 5 to 10
+        self.bottom_info_frame.pack(side="bottom", fill="x", padx=10, pady=10)
 
         # Folder Label (left)
         self.folder_label = tk.Label(
@@ -277,9 +504,9 @@ class ModLauncher(tk.Tk):
             text="Installation Folder: Not selected",
             font=("Arial", 10),
             anchor="w",
-            height=2  # Add this line to give more vertical space
+            height=2
         )
-        self.folder_label.pack(side="left", fill="x", expand=True)  # Add fill and expand
+        self.folder_label.pack(side="left", fill="x", expand=True)
 
         # Launcher Version Label (right)
         self.version_label = tk.Label(
@@ -287,9 +514,9 @@ class ModLauncher(tk.Tk):
             text=f"Launcher v{LAUNCHER_VERSION}",
             font=("Arial", 10),
             anchor="e",
-            height=2  # Match the height with folder_label
+            height=2
         )
-        self.version_label.pack(side="right", padx=(10, 0))  # Add some padding between labels
+        self.version_label.pack(side="right", padx=(10, 0))
 
     def fetch_news(self):
         """Fetches the news content."""
@@ -307,7 +534,7 @@ class ModLauncher(tk.Tk):
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_PATH) as key:
                 folder, _ = winreg.QueryValueEx(key, "InstallFolder")
                 installed, _ = winreg.QueryValueEx(key, "Installed")
-                
+
                 # Try to load language setting if it exists
                 try:
                     lang, _ = winreg.QueryValueEx(key, "Language")
@@ -339,12 +566,12 @@ class ModLauncher(tk.Tk):
         self.install_folder.set("")
         self.is_installed = False
         self.status_label.config(text="No folder saved. Please select an installation folder.", fg="red")
-        self.folder_label.config(text="Installation Folder: Not selected")  # Reset the label
+        self.folder_label.config(text="Installation Folder: Not selected")
         self.hide_download_button()
-        self.hide_play_button()  # Hide play button
-        self.uninstall_button.config(state="disabled")  # Disable the Uninstall button instead of hiding
-        self.create_shortcut_button.config(state="disabled")  # Disable the Shortcut button
-        self.language_dropdown.config(state="disabled")  # Disable the language dropdown
+        self.hide_play_button()
+        self.uninstall_button.config(state="disabled")
+        self.create_shortcut_button.config(state="disabled")
+        self.language_dropdown.config(state="disabled")
 
     def select_folder(self):
         """Opens dialog to select folder and checks mod updates."""
@@ -356,17 +583,16 @@ class ModLauncher(tk.Tk):
                 messagebox.showwarning(
                     "Invalid Folder",
                     "The selected folder does not contain an 'aotr' subfolder.\n\n"
-                    "Please select the correct Age of the Ring folder that contains "
-                    "the 'aotr' subfolder."
+                    "Please select the correct Age of the Ring folder that contains the 'aotr' subfolder."
                 )
                 self.status_label.config(
-                    text="Please select the correct Age of the Ring folder.", 
+                    text="Please select the correct Age of the Ring folder.",
                     fg="red"
                 )
                 self.hide_download_button()
                 self.hide_play_button()
                 return
-            
+
             self.install_folder.set(folder)
             self.folder_label.config(text=f"Installation Folder: {folder}")
             self.save_folder(folder, installed=False)
@@ -375,7 +601,7 @@ class ModLauncher(tk.Tk):
         else:
             self.status_label.config(text="Please select an installation folder.", fg="red")
             self.hide_download_button()
-            self.hide_play_button()  # Hide play button
+            self.hide_play_button()
 
     def save_folder(self, folder, installed):
         """Saves the folder path and installation state to the registry."""
@@ -425,47 +651,46 @@ class ModLauncher(tk.Tk):
                     self.status_label.config(text=f"Realms in Exile not found. Ready to download version {realms_version}.", fg="green")
                     self.download_button.config(text="Download Files", state="normal")
                     self.show_download_button()
-                    self.hide_play_button()  # Hide play button
-                    self.uninstall_button.config(state="disabled")  # Disable Uninstall button
-                    # self.create_shortcut_button.config(state="disabled")  # Disable Shortcut button
-                    self.folder_button.config(state="normal")  # Enable Select Folder button
-                    self.language_dropdown.config(state="disabled")  # Disable language dropdown
+                    self.hide_play_button()
+                    self.uninstall_button.config(state="disabled")
+                    self.folder_button.config(state="normal")
+                    self.language_dropdown.config(state="disabled")
                 elif local_version != remote_version:
                     self.status_label.config(
                         text=f"Update available: {remote_version} (Installed: {local_version})", fg="orange"
                     )
                     self.download_button.config(text="Download Update", state="normal")
                     self.show_download_button()
-                    self.show_play_button()  # Show play button for current version
-                    self.uninstall_button.config(state="normal")  # Enable Uninstall button
-                    self.create_shortcut_button.config(state="normal")  # Enable Shortcut button
-                    self.folder_button.config(state="disabled")  # Disable Select Folder button
-                    self.language_dropdown.config(state="readonly")  # Enable language dropdown
+                    self.show_play_button()
+                    self.uninstall_button.config(state="normal")
+                    self.create_shortcut_button.config(state="normal")
+                    self.folder_button.config(state="disabled")
+                    self.language_dropdown.config(state="readonly")
                 else:
                     self.status_label.config(text=f"Mod is up-to-date ({local_version}).", fg="green")
-                    self.hide_download_button()  # Hide the download button
-                    self.show_play_button()  # Show play button
-                    self.uninstall_button.config(state="normal")  # Ensure Uninstall button is enabled
-                    self.create_shortcut_button.config(state="normal")  # Enable Shortcut button
-                    self.folder_button.config(state="disabled")  # Disable Select Folder button
-                    self.language_dropdown.config(state="readonly")  # Enable language dropdown
+                    self.hide_download_button()
+                    self.show_play_button()
+                    self.uninstall_button.config(state="normal")
+                    self.create_shortcut_button.config(state="normal")
+                    self.folder_button.config(state="disabled")
+                    self.language_dropdown.config(state="readonly")
             else:
                 self.status_label.config(text="Failed to check for updates.", fg="red")
                 self.download_button.config(text="Retry", state="normal")
                 self.show_download_button()
-                self.hide_play_button()  # Hide play button on error
-                self.uninstall_button.config(state="disabled")  # Disable Uninstall button
-                self.create_shortcut_button.config(state="disabled")  # Disable Shortcut button
-                self.language_dropdown.config(state="disabled")  # Disable language dropdown
+                self.hide_play_button()
+                self.uninstall_button.config(state="disabled")
+                self.create_shortcut_button.config(state="disabled")
+                self.language_dropdown.config(state="disabled")
 
         except Exception as e:
             self.status_label.config(text=f"Error: {e}", fg="red")
             self.download_button.config(text="Retry", state="normal")
             self.show_download_button()
-            self.hide_play_button()  # Hide play button on error
-            self.uninstall_button.config(state="disabled")  # Disable Uninstall button
-            self.create_shortcut_button.config(state="disabled")  # Disable Shortcut button
-            self.language_dropdown.config(state="disabled")  # Disable language dropdown
+            self.hide_play_button()
+            self.uninstall_button.config(state="disabled")
+            self.create_shortcut_button.config(state="disabled")
+            self.language_dropdown.config(state="disabled")
 
     def show_download_button(self):
         """Show the download button."""
@@ -474,36 +699,36 @@ class ModLauncher(tk.Tk):
     def hide_download_button(self):
         """Hide the download button."""
         self.download_button.pack_forget()
-        
+
     def show_play_button(self):
         """Show the play button."""
         self.play_button.pack(side="left", padx=5)
-        
+
     def hide_play_button(self):
         """Hide the play button."""
         self.play_button.pack_forget()
-        
+
     def change_language(self, event=None):
         """Change the language of the mod."""
         if not self.is_installed:
             return
-            
+
         install_path = self.install_folder.get()
         if not install_path:
             messagebox.showerror("Error", "No installation folder selected.")
             return
-            
+
         # Data folder path (now in realms folder)
         realms_folder = os.path.join(install_path, "realms")
         data_folder = os.path.join(realms_folder, "data")
         translations_folder = os.path.join(data_folder, "translations")
-        
+
         # Target file
         target_file = os.path.join(data_folder, "lotr.str")
-        
+
         # Source file based on language selection
         selected_language = self.language.get().lower()
-        
+
         if "english" in selected_language:
             source_folder = os.path.join(translations_folder, "en")
         elif "portuguese" in selected_language:
@@ -511,22 +736,22 @@ class ModLauncher(tk.Tk):
         else:
             messagebox.showerror("Error", f"Unsupported language: {selected_language}")
             return
-            
+
         source_file = os.path.join(source_folder, "lotr.str")
-        
+
         # Check if source file exists
         if not os.path.exists(source_file):
             messagebox.showerror("Error", f"Language file not found: {source_file}")
             return
-            
+
         try:
             # Copy language file
             shutil.copy2(source_file, target_file)
-            
+
             # Save language selection to registry
             with winreg.CreateKey(winreg.HKEY_CURRENT_USER, REG_PATH) as key:
                 winreg.SetValueEx(key, "Language", 0, winreg.REG_SZ, self.language.get())
-                
+
             messagebox.showinfo("Success", f"Language changed to {self.language.get()}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to change language: {e}")
@@ -537,7 +762,7 @@ class ModLauncher(tk.Tk):
             # Path to the maps folder (now in realms folder)
             realms_folder = os.path.join(install_path, "realms")
             maps_folder = os.path.join(realms_folder, "maps")
-            
+
             # List of map folders to delete
             map_folders_to_delete = [
                 # Adventure maps
@@ -546,7 +771,7 @@ class ModLauncher(tk.Tk):
                 "map mp alternate durins folk",
                 "map mp alternate rhun",
                 "map mp alternate shadow and flame",
-                
+
                 # Fortress maps
                 "map mp fortress abrakhan",
                 "map mp fortress amon sul",
@@ -580,10 +805,10 @@ class ModLauncher(tk.Tk):
                 "map mp fortress umbar",
                 "map mp fortress wulfborg"
             ]
-            
+
             self.status_label.config(text="Performing post-installation cleanup...", fg="blue")
             self.update()
-            
+
             for map_folder in map_folders_to_delete:
                 folder_path = os.path.join(maps_folder, map_folder)
                 if os.path.exists(folder_path) and os.path.isdir(folder_path):
@@ -591,7 +816,7 @@ class ModLauncher(tk.Tk):
                     self.update()
                     shutil.rmtree(folder_path)
                     print(f"Deleted map folder: {folder_path}")
-            
+
             self.status_label.config(text="Map cleanup completed successfully.", fg="green")
             self.update()
         except Exception as e:
@@ -607,42 +832,42 @@ class ModLauncher(tk.Tk):
                 return False, "Source folder does not exist"
             if not os.path.exists(dest_folder):
                 return False, "Destination folder does not exist"
-            
+
             # Get file lists from both folders
             source_files = []
             dest_files = []
-            
+
             for root, dirs, files in os.walk(source_folder):
                 rel_path = os.path.relpath(root, source_folder)
                 for file in files:
                     source_files.append(os.path.join(rel_path, file))
-            
+
             for root, dirs, files in os.walk(dest_folder):
                 rel_path = os.path.relpath(root, dest_folder)
                 for file in files:
                     dest_files.append(os.path.join(rel_path, file))
-            
+
             # Check if file lists match
             if set(source_files) != set(dest_files):
                 missing_files = set(source_files) - set(dest_files)
                 extra_files = set(dest_files) - set(source_files)
                 return False, f"File mismatch. Missing: {len(missing_files)}, Extra: {len(extra_files)}"
-            
+
             # Check file sizes and modification times for a sample of files
             sample_files = source_files[:min(50, len(source_files))]  # Check first 50 files
             for file_path in sample_files:
                 source_file = os.path.join(source_folder, file_path)
                 dest_file = os.path.join(dest_folder, file_path)
-                
+
                 if not os.path.exists(dest_file):
                     return False, f"Destination file missing: {file_path}"
-                
+
                 # Compare file sizes
                 if os.path.getsize(source_file) != os.path.getsize(dest_file):
                     return False, f"File size mismatch: {file_path}"
-            
+
             return True, "Copy verification successful"
-            
+
         except Exception as e:
             return False, f"Verification error: {str(e)}"
 
@@ -650,18 +875,18 @@ class ModLauncher(tk.Tk):
         """Creates a copy of the 'aotr' folder and renames it to 'realms'."""
         aotr_folder = os.path.join(install_path, "aotr")
         realms_folder = os.path.join(install_path, "realms")
-        
+
         # Check if aotr folder exists
         if not os.path.exists(aotr_folder):
             raise Exception("'aotr' folder not found in the installation directory")
-        
+
         # Check if realms folder already exists and verify it
         if os.path.exists(realms_folder):
             self.status_label.config(text="Verifying existing realms folder...", fg="blue")
             self.update()
-            
+
             is_valid, message = self.verify_folder_copy(aotr_folder, realms_folder)
-            
+
             if is_valid:
                 self.status_label.config(text="Existing realms folder is valid.", fg="green")
                 self.update()
@@ -670,11 +895,11 @@ class ModLauncher(tk.Tk):
                 self.status_label.config(text=f"Invalid realms folder detected: {message}. Removing...", fg="orange")
                 self.update()
                 shutil.rmtree(realms_folder)
-        
+
         # Copy aotr folder to realms
         self.status_label.config(text="Copying AOTR folder...", fg="blue")
         self.update()
-        
+
         try:
             shutil.copytree(aotr_folder, realms_folder)
         except Exception as e:
@@ -682,22 +907,22 @@ class ModLauncher(tk.Tk):
             if os.path.exists(realms_folder):
                 shutil.rmtree(realms_folder)
             raise Exception(f"Failed to copy AOTR folder: {str(e)}")
-        
+
         # Verify the copy was successful
         self.status_label.config(text="Verifying copy integrity...", fg="blue")
         self.update()
-        
+
         is_valid, message = self.verify_folder_copy(aotr_folder, realms_folder)
-        
+
         if not is_valid:
             # Clean up failed copy
             if os.path.exists(realms_folder):
                 shutil.rmtree(realms_folder)
             raise Exception(f"Copy verification failed: {message}")
-        
+
         self.status_label.config(text="Realms folder prepared successfully.", fg="green")
         self.update()
-        
+
         return realms_folder
 
     def download_and_extract_mod(self):
@@ -710,18 +935,18 @@ class ModLauncher(tk.Tk):
         try:
             # Disable folder selection during download/installation
             self.folder_button.config(state="disabled")
-            
+
             # Hide the Download button during the download process
             self.hide_download_button()
-            self.hide_play_button()  # Hide play button during installation
+            self.hide_play_button()
             self.progress.pack()  # Show progress bar
-            
+
             # Check for existing AOTR RAR file from previous failed installation
             existing_rar_path = os.path.join(install_path, "aotr.rar")
-            
+
             # Check AOTR version and download if needed
             aotr_updated, aotr_rar_path = self.check_aotr_version(install_path)
-            
+
             # If we found an existing RAR file, we need to extract it
             if aotr_updated and aotr_rar_path and os.path.exists(aotr_rar_path):
                 # Check if realms folder already exists
@@ -733,7 +958,7 @@ class ModLauncher(tk.Tk):
                         # Try to extract the RAR file
                         with rarfile.RarFile(aotr_rar_path, "r") as rar_ref:
                             rar_ref.extractall(install_path)
-                            
+
                             # If the RAR contains an 'aotr' folder, rename it to 'realms'
                             extracted_aotr = os.path.join(install_path, "aotr")
                             if os.path.exists(extracted_aotr):
@@ -748,10 +973,10 @@ class ModLauncher(tk.Tk):
                                         shutil.move(item_path, os.path.join(realms_folder, item))
                                     elif os.path.isdir(item_path) and item != "realms":
                                         shutil.move(item_path, os.path.join(realms_folder, item))
-                        
+
                         self.status_label.config(text="Successfully extracted existing AOTR RAR file", fg="green")
                         self.update()
-                        
+
                     except Exception as extract_error:
                         print(f"Failed to extract existing RAR file: {extract_error}")
                         self.status_label.config(text="Failed to extract existing RAR file, continuing...", fg="orange")
@@ -759,12 +984,12 @@ class ModLauncher(tk.Tk):
                         # Reset aotr_updated since extraction failed
                         aotr_updated = False
                         aotr_rar_path = None
-            
+
             # If no RAR path was returned but we have an existing RAR file, use it
             if not aotr_rar_path and os.path.exists(existing_rar_path):
                 aotr_rar_path = existing_rar_path
                 print(f"Found existing AOTR RAR file: {existing_rar_path}")
-            
+
             # Check if we need to extract the RAR file (if it exists but realms folder is missing/incomplete)
             realms_folder = os.path.join(install_path, "realms")
             if aotr_rar_path and os.path.exists(aotr_rar_path) and (not os.path.exists(realms_folder) or not os.path.isdir(realms_folder)):
@@ -774,7 +999,7 @@ class ModLauncher(tk.Tk):
                     # Try to extract the RAR file
                     with rarfile.RarFile(aotr_rar_path, "r") as rar_ref:
                         rar_ref.extractall(install_path)
-                        
+
                         # If the RAR contains an 'aotr' folder, rename it to 'realms'
                         extracted_aotr = os.path.join(install_path, "aotr")
                         if os.path.exists(extracted_aotr):
@@ -789,25 +1014,25 @@ class ModLauncher(tk.Tk):
                                     shutil.move(item_path, os.path.join(realms_folder, item))
                                 elif os.path.isdir(item_path) and item != "realms":
                                     shutil.move(item_path, os.path.join(realms_folder, item))
-                    
+
                     self.status_label.config(text="Successfully extracted existing AOTR RAR file", fg="green")
                     self.update()
                     aotr_updated = True  # Mark as updated since we extracted the RAR
-                    
+
                 except Exception as extract_error:
                     print(f"Failed to extract existing RAR file: {extract_error}")
                     self.status_label.config(text="Failed to extract existing RAR file, continuing...", fg="orange")
                     self.update()
-            
+
             # Get remote version for comparison
             remote_version = self.get_remote_version()
-            
+
             # Prepare the realms folder based on whether AOTR was updated
             version_file = os.path.join(realms_folder, "realms_version.json")
             is_update = False
             needs_base_first = False
             local_version = "not installed"
-            
+
             if os.path.exists(version_file):
                 try:
                     with open(version_file, "r") as file:
@@ -829,45 +1054,25 @@ class ModLauncher(tk.Tk):
             # Ensure realms folder exists before proceeding
             if not os.path.exists(realms_folder) or not os.path.isdir(realms_folder):
                 raise Exception("Realms folder not found. AOTR extraction failed and no fallback available.")
-            
-            # Determine if this is a new installation or an update
-            # version_file = os.path.join(realms_folder, "realms_version.json")
-            # is_update = False
-            # needs_base_first = False
-            # local_version = "not installed"
-            
-            # if os.path.exists(version_file):
-            #     try:
-            #         with open(version_file, "r") as file:
-            #             content = file.read().strip()
-            #             if content:
-            #                 local_version = json.loads(content).get("version", "unknown")
-            #                 is_update = True
-                        
-            #                 # Check if local version is lower than base version
-            #                 if self.is_lower_version(local_version, BASE_MOD_VERSION):
-            #                     needs_base_first = True
-            #     except:
-            #         is_update = False
-            
+
             # First install base version if needed
             if needs_base_first:
                 self.status_label.config(text=f"Installing base version {BASE_MOD_VERSION}...", fg="blue")
                 self.update()
-                
+
                 # Download and install base version
                 self.download_and_install_package(realms_folder, BASE_MOD_ZIP_URL, "base mod", BASE_MOD_VERSION)
-                
+
                 # Update local version to base version
                 with open(version_file, "w") as file:
                     json.dump({"version": BASE_MOD_VERSION}, file)
-                
-                # Now we need to check if we need to update further
+
+                # Now update to remote if needed
                 if self.is_lower_version(BASE_MOD_VERSION, remote_version):
                     self.status_label.config(text=f"Base version installed. Now updating to version {remote_version}...", fg="blue")
                     self.update()
                     self.download_and_install_package(realms_folder, UPDATE_ZIP_URL, "update", remote_version)
-                    
+
                     # Update to remote version
                     with open(version_file, "w") as file:
                         json.dump({"version": remote_version}, file)
@@ -878,21 +1083,20 @@ class ModLauncher(tk.Tk):
                     download_url = UPDATE_ZIP_URL if is_update else BASE_MOD_ZIP_URL
                     version_label = "update" if is_update else "base mod"
                     version_number = remote_version if is_update else BASE_MOD_VERSION
-                    
+
                     self.download_and_install_package(realms_folder, download_url, version_label, version_number)
-                    
+
                     # Save the installed version
                     with open(version_file, "w") as file:
                         json.dump({"version": remote_version if is_update else BASE_MOD_VERSION}, file)
                 else:
                     # Only download Realms if AOTR wasn't updated (since AOTR already contains Realms)
-                    # Choose the appropriate download URL
                     download_url = UPDATE_ZIP_URL if is_update else BASE_MOD_ZIP_URL
                     version_label = "update" if is_update else "base mod"
                     version_number = remote_version if is_update else BASE_MOD_VERSION
-                    
+
                     self.download_and_install_package(realms_folder, download_url, version_label, version_number)
-                    
+
                     # Save the installed version
                     with open(version_file, "w") as file:
                         json.dump({"version": remote_version if is_update else BASE_MOD_VERSION}, file)
@@ -913,19 +1117,19 @@ class ModLauncher(tk.Tk):
 
             # Update status and enable uninstall button
             self.status_label.config(text="Mod installed successfully!", fg="green")
-            self.uninstall_button.config(state="normal")  # Enable the Uninstall button
-            self.progress.pack_forget()  # Hide progress bar
+            self.uninstall_button.config(state="normal")
+            self.progress.pack_forget()
             self.save_folder(install_path, installed=True)
-            
+
             # Re-enable folder selection
             self.folder_button.config(state="normal")
-            
+
             # Apply the language
             self.change_language()
-            
+
             # Enable language dropdown
             self.language_dropdown.config(state="readonly")
-            
+
             # Show play button
             self.show_play_button()
 
@@ -934,10 +1138,10 @@ class ModLauncher(tk.Tk):
 
         except Exception as e:
             self.status_label.config(text=f"Error: {e}", fg="red")
-            self.progress.pack_forget()  # Hide progress bar
-            self.show_download_button()  # Show the Download button again if there's an error
-            self.hide_play_button()  # Hide play button on error
-            
+            self.progress.pack_forget()
+            self.show_download_button()
+            self.hide_play_button()
+
             # Re-enable folder selection on error
             self.folder_button.config(state="normal")
 
@@ -949,11 +1153,11 @@ class ModLauncher(tk.Tk):
         else:
             self.status_label.config(text=f"Downloading {version_label} version {version_number}...", fg="blue")
         self.update()
-        
+
         # Create a temporary file name in the parent directory to avoid nesting
         parent_dir = os.path.dirname(install_path)
         zip_path = os.path.join(parent_dir, f"{version_label.replace(' ', '_')}.zip")
-        
+
         # Download the ZIP file
         response = requests.get(download_url, stream=True)
         total_size = int(response.headers.get("content-length", 0))
@@ -964,7 +1168,7 @@ class ModLauncher(tk.Tk):
                 if chunk:
                     file.write(chunk)
                     downloaded_size += len(chunk)
-                    self.progress["value"] = (downloaded_size / total_size) * 100
+                    self.progress["value"] = (downloaded_size / total_size) * 100 if total_size else 0
                     self.update()
 
         # Update status during installation
@@ -976,62 +1180,64 @@ class ModLauncher(tk.Tk):
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
         os.makedirs(temp_dir)
-        
+
         try:
             # Extract the ZIP file to temporary location
             with ZipFile(zip_path, "r") as zip_ref:
                 zip_ref.extractall(temp_dir)
-            
+
             # Find the realms folder in the extracted structure
             realms_folder_found = None
             for root, dirs, files in os.walk(temp_dir):
                 if "realms" in dirs:
                     realms_folder_found = os.path.join(root, "realms")
                     break
-            
+
             if realms_folder_found:
                 # Ensure the target directory exists
                 if not os.path.exists(install_path):
                     os.makedirs(install_path)
-                
-                # Extract files directly to the target location for proper overwrite
+
+                # Extract each file from the found realms folder to the target location
                 self.status_label.config(text="Installing realms folder...", fg="blue")
                 self.update()
-                
-                # Extract each file from the found realms folder to the target location
+
                 for root, dirs, files in os.walk(realms_folder_found):
                     # Calculate the relative path from the realms folder
                     rel_path = os.path.relpath(root, realms_folder_found)
                     target_dir = os.path.join(install_path, rel_path)
-                    
+
                     # Create target directory if it doesn't exist
                     if not os.path.exists(target_dir):
                         os.makedirs(target_dir)
-                    
-                    # Copy files to target location (this will overwrite existing files)
+
+                    # Copy files to target location (overwrite existing files)
                     for file in files:
                         src_file = os.path.join(root, file)
                         dst_file = os.path.join(target_dir, file)
                         shutil.copy2(src_file, dst_file)
-                
+
             else:
                 # Fallback: extract directly to parent directory (old behavior)
                 self.status_label.config(text="Using fallback extraction method...", fg="blue")
                 self.update()
                 with ZipFile(zip_path, "r") as zip_ref:
                     zip_ref.extractall(parent_dir)
-        
+
         finally:
             # Clean up temporary directory
             if os.path.exists(temp_dir):
                 shutil.rmtree(temp_dir)
 
         # Remove the downloaded ZIP file
-        os.remove(zip_path)
-        
+        try:
+            os.remove(zip_path)
+        except Exception:
+            pass
+
         # Delete specific map folders after installation
         self.delete_specific_folders(install_path)
-        
+
         self.status_label.config(text=f"{version_label.capitalize()} version {version_number} installed successfully", fg="green")
         self.update()
 
@@ -1040,20 +1246,20 @@ class ModLauncher(tk.Tk):
         try:
             v1_parts = list(map(int, version1.split(".")))
             v2_parts = list(map(int, version2.split(".")))
-            
+
             # Pad with zeros if needed
             while len(v1_parts) < len(v2_parts):
                 v1_parts.append(0)
             while len(v2_parts) < len(v1_parts):
                 v2_parts.append(0)
-                
+
             # Compare version parts
             for i in range(len(v1_parts)):
                 if v1_parts[i] < v2_parts[i]:
                     return True
                 elif v1_parts[i] > v2_parts[i]:
                     return False
-                    
+
             # If we get here, versions are equal
             return False
         except ValueError:
@@ -1077,30 +1283,30 @@ class ModLauncher(tk.Tk):
             if not os.path.exists(aotr_data_path):
                 print(f"AOTR data file not found: {aotr_data_path}")
                 return "0.0.0"
-            
+
             with open(aotr_data_path, 'r', encoding='utf-8', errors='ignore') as file:
                 lines = file.readlines()
-                
+
                 # Look for the active (uncommented) version line
                 import re
                 version_pattern = r'"Age of the Ring Version (\d+\.\d+(?:\.\d+)?)"'
-                
+
                 for line in lines:
                     line = line.strip()
                     # Skip commented lines (lines starting with //)
                     if line.startswith('//'):
                         continue
-                    
+
                     # Look for the version pattern in non-commented lines
                     match = re.search(version_pattern, line)
                     if match:
                         version = match.group(1)
                         print(f"Found AOTR version in lotr.str: {version}")
                         return version
-                
+
                 print("Could not find active AOTR version in lotr.str file")
                 return "0.0.0"
-                    
+
         except Exception as e:
             print(f"Error parsing AOTR version from lotr.str: {e}")
             return "0.0.0"
@@ -1125,10 +1331,10 @@ class ModLauncher(tk.Tk):
             # Get AOTR version info from remote
             aotr_info = self.get_aotr_version_info()
             required_version = aotr_info["required_aotr_version"]
-            
+
             # Get current AOTR version from local lotr.str file
             current_version = self.get_aotr_version_from_str_file(install_path)
-            
+
             # Check if current AOTR version is greater than or equal to required
             if self.is_lower_version(current_version, required_version):
                 # Check if aotr.rar already exists locally
@@ -1146,14 +1352,14 @@ class ModLauncher(tk.Tk):
                              f"Current version: {current_version}. Downloading...", fg="blue"
                     )
                     self.update()
-                    
+
                     # Download and install AOTR
                     rar_path = self.download_and_install_aotr(install_path, required_version)
                     return True, rar_path
             else:
                 print(f"AOTR version {current_version} is compatible (required: {required_version})")
                 return False, None
-                
+
         except Exception as e:
             print(f"Error checking AOTR version: {e}")
             return False, None
@@ -1161,13 +1367,9 @@ class ModLauncher(tk.Tk):
     def download_and_install_aotr(self, install_path, aotr_version):
         """Downloads and installs the AOTR mod."""
         try:
-            # Update status - keep the informative message from check_aotr_version
-            # Don't overwrite the status message here since it's already set in check_aotr_version
-            self.update()
-            
             # Create a temporary file name
             rar_path = os.path.join(install_path, "aotr.rar")
-            
+
             # Download the RAR file
             response = requests.get(AOTR_RAR_URL, stream=True)
             total_size = int(response.headers.get("content-length", 0))
@@ -1197,7 +1399,7 @@ class ModLauncher(tk.Tk):
             try:
                 with rarfile.RarFile(rar_path, "r") as rar_ref:
                     rar_ref.extractall(install_path)
-                    
+
                     # If the RAR contains an 'aotr' folder, rename it to 'realms'
                     extracted_aotr = os.path.join(install_path, "aotr")
                     if os.path.exists(extracted_aotr):
@@ -1212,27 +1414,27 @@ class ModLauncher(tk.Tk):
                                 shutil.move(item_path, os.path.join(realms_folder, item))
                             elif os.path.isdir(item_path) and item != "realms":
                                 shutil.move(item_path, os.path.join(realms_folder, item))
-                
+
                 self.status_label.config(text=f"AOTR version {aotr_version} extracted successfully", fg="green")
                 self.update()
-                
+
             except Exception as rar_error:
                 print(f"RAR extraction failed: {rar_error}")
                 self.status_label.config(text="RAR extraction failed, checking AOTR version...", fg="orange")
                 self.update()
-                
+
                 # Show a helpful message about installing RAR tools
                 if "Cannot find working tool" in str(rar_error):
                     print("Note: To extract RAR files, install a RAR extraction tool like:")
                     print("  - WinRAR: https://www.win-rar.com/")
                     print("  - 7-Zip: https://7-zip.org/")
                     print("  - Or use the command line: choco install unrar")
-                
+
                 # Check if we should use existing AOTR folder based on version requirements
                 aotr_info = self.get_aotr_version_info()
                 required_version = aotr_info["required_aotr_version"]
                 current_version = self.get_aotr_version_from_str_file(install_path)
-                
+
                 # Only use existing AOTR if current version is compatible (not lower than required)
                 if self.is_lower_version(current_version, required_version):
                     # Current AOTR version is lower than required, don't use it
@@ -1246,21 +1448,18 @@ class ModLauncher(tk.Tk):
                         self.update()
                     else:
                         raise Exception("RAR extraction failed and no existing AOTR folder found")
-                    
+
                     # Delete the downloaded RAR file since we couldn't use it
                     if os.path.exists(rar_path):
                         os.remove(rar_path)
                     return None  # No RAR file to track since we deleted it
-            
-            # Don't delete the RAR file here - return the path instead
-            # os.remove(rar_path)  # Commented out - will be deleted later
-            
+
             self.status_label.config(text=f"AOTR version {aotr_version} installed successfully", fg="green")
             self.update()
-            
+
             # Return the RAR file path so it can be deleted after realms.zip extraction
             return rar_path
-            
+
         except Exception as e:
             print(f"Error downloading AOTR: {e}")
             self.status_label.config(text=f"Error downloading AOTR: {e}", fg="red")
@@ -1274,7 +1473,7 @@ class ModLauncher(tk.Tk):
             install_path = os.path.normpath(self.install_folder.get())
             rotwk_folder = os.path.join(install_path, "rotwk")
             game_executable = os.path.normpath(os.path.join(rotwk_folder, "lotrbfme2ep1.exe"))
-            
+
             # Check if executable exists
             if not os.path.exists(game_executable):
                 messagebox.showerror("Error", f"Could not find the game executable at: {game_executable}")
@@ -1286,7 +1485,7 @@ class ModLauncher(tk.Tk):
             # Copy dxvk.conf from realms/dxvk/ to rotwk/ if it exists
             dxvk_source = os.path.join(mod_folder, "dxvk", "dxvk.conf")
             dxvk_dest = os.path.join(rotwk_folder, "dxvk.conf")
-            
+
             if os.path.exists(dxvk_source):
                 try:
                     shutil.copy2(dxvk_source, dxvk_dest)
@@ -1299,13 +1498,13 @@ class ModLauncher(tk.Tk):
             # Create the command line with mod parameter
             cmd = f'"{game_executable}" -mod "{mod_folder}"'
             print(f"Executing command: {cmd}")
-            
+
             # Launch the game
             subprocess.Popen(cmd, shell=True)
-            
+
             # Minimize the launcher window after launching
             self.iconify()
-            
+
         except Exception as e:
             messagebox.showerror("Error", f"Failed to launch the game: {e}")
 
@@ -1331,7 +1530,6 @@ class ModLauncher(tk.Tk):
 
                 # Locate the shortcut and delete it
                 desktop = os.path.normpath(os.path.join(os.environ["USERPROFILE"], "Desktop"))
-                shortcut_pattern = "Realms in Exile v*.lnk"  # Pattern for the shortcut name
 
                 for file in os.listdir(desktop):
                     if re.match(rf"Realms in Exile v.*\.lnk", file):  # Match all versions
@@ -1348,12 +1546,12 @@ class ModLauncher(tk.Tk):
                 self.save_folder("", installed=False)
 
                 # Update UI elements
-                self.hide_download_button()  # Ensure the Download button is hidden
-                self.hide_play_button()  # Hide the Play button
-                self.uninstall_button.config(state="disabled")  # Disable the Uninstall button (no hiding)
-                self.create_shortcut_button.config(state="disabled")  # Disable the Shortcut button
-                self.folder_button.config(state="normal")  # Enable the Select Folder button
-                self.language_dropdown.config(state="disabled")  # Disable language dropdown
+                self.hide_download_button()
+                self.hide_play_button()
+                self.uninstall_button.config(state="disabled")
+                self.create_shortcut_button.config(state="disabled")
+                self.folder_button.config(state="normal")
+                self.language_dropdown.config(state="disabled")
 
             except Exception as e:
                 self.status_label.config(text=f"Error uninstalling mod: {e}", fg="red")
@@ -1366,7 +1564,7 @@ class ModLauncher(tk.Tk):
             install_path = os.path.normpath(self.install_folder.get())
             rotwk_folder = os.path.join(install_path, "rotwk")
             game_executable = os.path.normpath(os.path.join(rotwk_folder, "lotrbfme2ep1.exe"))
-            
+
             if not os.path.exists(game_executable):
                 messagebox.showerror("Error", f"Could not find the game executable at: {game_executable}")
                 return
@@ -1413,26 +1611,25 @@ class ModLauncher(tk.Tk):
             print(f"Fetching version.json from: {MOD_INFO_URL}")
             response = requests.get(MOD_INFO_URL)
             print(f"Response status code: {response.status_code}")
-            
+
             if response.status_code == 200:
                 version_data = response.json()
                 print(f"Response content: {version_data}")  # Log the parsed JSON
-                
+
                 # Extract launcher version from JSON
                 latest_launcher_version = version_data.get("launcher_version", "0.0.0")
                 print(f"Latest launcher version: {latest_launcher_version}")
                 print(f"Current launcher version: {LAUNCHER_VERSION}")
-                
+
                 # Compare current launcher version with the latest
                 if self.is_newer_version(LAUNCHER_VERSION, latest_launcher_version):
                     print("New launcher version detected!")
                     user_choice = messagebox.askyesno(
                         "Launcher Update Available",
-                        f"A new launcher version ({latest_launcher_version}) is available. Download update?"
+                        f"A new launcher version ({latest_launcher_version}) is available. Download and apply now?"
                     )
                     if user_choice:
                         self.update_launcher()
-                    # Do not close the launcher automatically
                 else:
                     print(f"Launcher is up-to-date ({LAUNCHER_VERSION}).")
             else:
@@ -1441,57 +1638,148 @@ class ModLauncher(tk.Tk):
             messagebox.showerror("Error", f"Failed to check for launcher updates: {e}")
 
     def update_launcher(self):
-        """Downloads the updated launcher ZIP and tells the user to extract it manually."""
+        """
+        Auto-updates the launcher:
+        1) download + extract to temp
+        2) spawn updater (PowerShell) that waits for us to exit
+        3) updater mirrors files into our launcher folder
+        4) updater relaunches the launcher
+        5) logs everything to log.txt (in the launcher folder)
+        """
         try:
-            # Determine the folder where this executable or script is located
-            if getattr(sys, 'frozen', False):
-                # Running in a PyInstaller bundle
-                exe_dir = os.path.dirname(sys.executable)
+            self.enter_update_mode()
+            self.status_label.config(text="Preparing launcher update...", fg="blue")
+            self.update()
+
+            # 1) Stage the ZIP
+            staged_dir = self._download_and_stage_zip(LAUNCHER_ZIP_URL)
+
+            # 2) Write updater script
+            temp_root = os.path.dirname(os.path.dirname(staged_dir))  # parent of 'staged'
+            ps1_path = os.path.join(temp_root, "do_update.ps1")
+            _write_updater_ps1(ps1_path)
+
+            # Path for target
+            target_dir = _launcher_dir()
+
+            # ALWAYS write logs to %TEMP% (writable even without elevation)
+            log_path = os.path.join(tempfile.gettempdir(), "realms_launcher_update.log")
+
+            # Pre-create & stamp the log so we know Python got this far
+            try:
+                with open(log_path, "a", encoding="utf-8") as lf:
+                    lf.write(f"[python] starting update at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            except Exception as e:
+                messagebox.showerror("Logging", f"Couldn't open log file:\n{log_path}\n{e}")
+
+            if _is_frozen():
+                relaunch_path = _launcher_path()     # the updated .exe
+                relaunch_args = ""                   # none
             else:
-                # Running as a normal Python script
-                exe_dir = os.path.dirname(os.path.abspath(__file__))
+                # Relaunch the same script with the same interpreter
+                relaunch_path = sys.executable
+                relaunch_args = f'"{os.path.abspath(sys.argv[0])}"'
 
-            zip_filename = "realms_launcher.zip"
-            zip_path = os.path.join(exe_dir, zip_filename)
+            relaunch_cwd = target_dir  # important for relative assets
 
-            # Download the launcher update
-            response = requests.get(LAUNCHER_ZIP_URL, stream=True)
-            if response.status_code != 200:
-                raise Exception(f"Unexpected status code: {response.status_code}")
+            # 3) Build PowerShell argument list
+            base_args = [
+                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", ps1_path,
+                "-TargetDir", target_dir,
+                "-StagedDir", staged_dir,
+                "-MainPid", str(os.getpid()),
+                "-RelaunchPath", relaunch_path,
+                "-RelaunchArgs", relaunch_args,
+                "-RelaunchCwd", relaunch_cwd,
+                "-LogPath", log_path,
+            ]
 
-            total_size = int(response.headers.get("content-length", 0))
-            downloaded_size = 0
+            # 4) Launch updater (optionally elevated)
+            if USE_ELEVATED_UPDATER:
+                # When elevating with ShellExecute, we must pass a single string of args
+                def _join_ps_args(args):
+                    out = []
+                    for a in args:
+                        if a is None:
+                            continue
+                        # Quote only when needed
+                        if (' ' in a or '"' in a) and not a.startswith('-'):
+                            a = '"' + a.replace('"', '""') + '"'
+                        out.append(a)
+                    return " ".join(out)
 
-            with open(zip_path, "wb") as file:
-                # Increase chunk_size to 8192 for more efficient downloads
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        file.write(chunk)
-                        downloaded_size += len(chunk)
-                        if total_size:
-                            self.progress["value"] = (downloaded_size / total_size) * 100
-                        self.update()
+                arg_string = _join_ps_args(base_args)
+                ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", "powershell.exe", arg_string, None, 1
+                )
+            else:
+                _start_detached(["powershell.exe"] + base_args)
 
-            # Show message to user to extract manually
-            messagebox.showinfo(
-                "Launcher Update Downloaded",
-                f"The launcher update has been downloaded as '{zip_filename}' in the launcher folder.\n\n"
-                "Please close the launcher and extract the contents of this ZIP file over your current launcher files to update."
-            )
+            # 5) Inform and quit so the updater can replace files
+            self.status_label.config(text="Applying update... The launcher will close and reopen.", fg="blue")
+            self.update()
+            self.after(300, self._quit_for_update)
 
         except Exception as e:
-            messagebox.showerror("Update Failed", f"Failed to download the launcher update: {e}")
+            messagebox.showerror("Update Failed", f"Failed to update the launcher: {e}")
+            self.progress.pack_forget()
+            self.exit_update_mode()
 
     def is_newer_version(self, current_version, latest_version):
-        """Compares two version strings numerically."""
+        """Return True if latest_version > current_version (numeric compare)."""
         try:
             current_parts = list(map(int, current_version.split(".")))
             latest_parts = list(map(int, latest_version.split(".")))
-            print(f"Comparing versions: {current_parts} < {latest_parts}")
+            # Pad arrays to equal length
+            L = max(len(current_parts), len(latest_parts))
+            current_parts += [0] * (L - len(current_parts))
+            latest_parts += [0] * (L - len(latest_parts))
             return latest_parts > current_parts
         except ValueError:
-            print("Error parsing version strings for comparison.")
             return False
+        
+    def enter_update_mode(self):
+        self.is_updating = True
+        self.hide_play_button()
+        # lock UI so the user can't trigger other actions mid-update
+        for w in (self.folder_button, self.uninstall_button, self.language_dropdown):
+            try:
+                w.config(state="disabled")
+            except Exception:
+                pass
+        try:
+            self.download_button.config(state="disabled")
+        except Exception:
+            pass
+        # show progress bar if not visible
+        try:
+            self.progress.pack()
+        except Exception:
+            pass
+
+    def exit_update_mode(self):
+        # Only used if update failed; on success we quit the app.
+        self.is_updating = False
+        # restore controls (Play may stay hidden if you prefer; here we restore it)
+        try:
+            self.show_play_button()
+        except Exception:
+            pass
+        for w in (self.folder_button, self.uninstall_button, self.language_dropdown):
+            try:
+                # folder_button normally disabled after install checks; safest is "normal"
+                w.config(state="normal")
+            except Exception:
+                pass
+        try:
+            self.download_button.config(state="normal")
+        except Exception:
+            pass
+        try:
+            self.progress.pack_forget()
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     app = ModLauncher()
