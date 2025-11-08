@@ -34,7 +34,7 @@ UPDATE_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_update.
 AOTR_RAR_URL = "https://f005.backblazeb2.com/file/RealmsInExile/aotr.rar"  # AOTR download
 LAUNCHER_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_launcher_beta.zip"  # Launcher update package
 NEWS_URL = "https://raw.githubusercontent.com/hansnery/Realms-Launcher/refs/heads/main/news.html"
-LAUNCHER_VERSION = "1.0.6"  # Updated launcher version
+LAUNCHER_VERSION = "1.0.7"  # Updated launcher version
 REG_PATH = r"SOFTWARE\REALMS_Launcher"
 
 
@@ -276,9 +276,12 @@ class ModLauncher(tk.Tk):
             self.check_admin_privileges()
 
         self.title("Age of the Ring: Realms in Exile Launcher")
-        self.geometry("600x520")
+        self.geometry("800x700")
         self.resizable(False, False)
         self.iconbitmap(self.resource_path("aotr_fs.ico"))
+        
+        # Set custom cursor for the launcher window
+        self.set_custom_cursor(self)
 
         # Selected folder and mod state
         self.install_folder = tk.StringVar()
@@ -287,6 +290,9 @@ class ModLauncher(tk.Tk):
         # Language selection
         self.language = tk.StringVar()
         self.language.set("english")  # Default language
+
+        # Create background canvas
+        self.create_background()
 
         # Layout Frames
         self.create_banner()
@@ -311,7 +317,7 @@ class ModLauncher(tk.Tk):
 
         # Download
         self.status_label.config(text="Downloading launcher update...", fg="blue")
-        self.progress.pack()
+        self.bg_canvas.itemconfig(self.progress_window, state="normal")
         self.progress["value"] = 0
         self.update()
 
@@ -400,123 +406,541 @@ class ModLauncher(tk.Tk):
             return os.path.join(sys._MEIPASS, relative_path)
         return os.path.join(os.path.abspath("."), relative_path)
 
+    def set_custom_cursor(self, widget):
+        """Sets the custom cursor on a widget."""
+        cursor_path = self.resource_path("SCCpointer.ico")
+        if not os.path.exists(cursor_path):
+            return
+        
+        # Try different cursor formats in order of preference
+        abs_cursor_path = os.path.abspath(cursor_path)
+        tk_cursor_path = abs_cursor_path.replace("\\", "/")
+        
+        # Method 1: Try @ prefix with forward slashes (Windows .cur/.ico format)
+        try:
+            widget.config(cursor=f"@{tk_cursor_path}")
+            return
+        except:
+            pass
+        
+        # Method 2: Try @ prefix with backslashes
+        try:
+            widget.config(cursor=f"@{abs_cursor_path}")
+            return
+        except:
+            pass
+        
+        # Method 3: Try without @ prefix (some Tkinter versions)
+        try:
+            widget.config(cursor=tk_cursor_path)
+            return
+        except:
+            pass
+        
+        # Method 4: Try with just the filename (if in system path)
+        try:
+            cursor_filename = os.path.basename(cursor_path)
+            widget.config(cursor=f"@{cursor_filename}")
+            return
+        except:
+            pass
+        
+        # If all methods fail, print error but don't crash
+        print(f"Warning: Could not set custom cursor from {cursor_path}")
+
+    def create_background(self):
+        """Creates a canvas with background image and fade effect."""
+        try:
+            # Create canvas for background
+            self.bg_canvas = tk.Canvas(
+                self, width=800, height=700, highlightthickness=0
+            )
+            self.bg_canvas.pack(fill="both", expand=True)
+            
+            # Set custom cursor for canvas
+            self.set_custom_cursor(self.bg_canvas)
+
+            # Load and resize background image
+            bg_image = Image.open(self.resource_path("background.jpg"))
+            bg_image = bg_image.resize((800, 700), Image.Resampling.LANCZOS)
+            
+            # Create fade overlay - darker at edges, lighter in center
+            from PIL import ImageDraw
+            fade_overlay = Image.new("RGBA", (800, 700), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(fade_overlay)
+            
+            # Create radial fade using ellipses for better performance
+            center_x, center_y = 400, 350
+            # Create multiple concentric ellipses for smooth gradient
+            max_radius = 300
+            for i in range(max_radius, 0, -2):
+                alpha = int((1 - i/max_radius) ** 1.5 * 120)
+                if alpha > 0:
+                    # Draw ellipse with decreasing opacity
+                    bbox = [
+                        center_x - i, center_y - int(i * 0.8),
+                        center_x + i, center_y + int(i * 0.8)
+                    ]
+                    # Use a semi-transparent black for the fade
+                    draw.ellipse(bbox, fill=(0, 0, 0, alpha))
+            
+            # Composite the fade overlay onto the background
+            bg_image = bg_image.convert("RGBA")
+            bg_image = Image.alpha_composite(bg_image, fade_overlay)
+            bg_image = bg_image.convert("RGB")
+            
+            self.bg_photo = ImageTk.PhotoImage(bg_image)
+
+            # Place background image on canvas
+            self.bg_canvas.create_image(0, 0, anchor="nw", image=self.bg_photo)
+
+            # Store reference to prevent garbage collection
+            self.bg_canvas.bg_image = self.bg_photo
+        except Exception as e:
+            print(f"Error loading background: {e}")
+            # Fallback: create a simple colored canvas
+            self.bg_canvas = tk.Canvas(
+                self, width=800, height=700, bg="#2b2b2b",
+                highlightthickness=0
+            )
+            self.bg_canvas.pack(fill="both", expand=True)
+
+    def draw_separator_border(self, x, y, width, height, tag="separator"):
+        """Draws a separator border around a frame at given position."""
+        # Top border
+        self.bg_canvas.create_line(
+            x - width//2, y - height//2 - 1,
+            x + width//2, y - height//2 - 1,
+            fill="#7f7f7f", width=2, tags=tag
+        )
+        self.bg_canvas.create_rectangle(
+            x - width//2, y - height//2,
+            x + width//2, y - height//2 + 1,
+            fill="#5f5f5f", outline="", tags=tag
+        )
+        # Bottom border
+        self.bg_canvas.create_rectangle(
+            x - width//2, y + height//2 - 1,
+            x + width//2, y + height//2,
+            fill="#5f5f5f", outline="", tags=tag
+        )
+        self.bg_canvas.create_rectangle(
+            x - width//2, y + height//2,
+            x + width//2, y + height//2 + 2,
+            fill="#1f1f1f", outline="", tags=tag
+        )
+        self.bg_canvas.create_rectangle(
+            x - width//2, y + height//2 + 2,
+            x + width//2, y + height//2 + 4,
+            fill="#0f0f0f", outline="", tags=tag
+        )
+        # Left border
+        self.bg_canvas.create_line(
+            x - width//2 - 1, y - height//2,
+            x - width//2 - 1, y + height//2,
+            fill="#5f5f5f", width=2, tags=tag
+        )
+        # Right border
+        self.bg_canvas.create_line(
+            x + width//2 + 1, y - height//2,
+            x + width//2 + 1, y + height//2,
+            fill="#5f5f5f", width=2, tags=tag
+        )
+
+    def update_canvas_text(self, text_id, text=None, fg=None):
+        """Updates a canvas text item's text and/or color."""
+        if text is not None:
+            self.bg_canvas.itemconfig(text_id, text=text)
+        if fill is not None:
+            self.bg_canvas.itemconfig(text_id, fg=fill)
+
+    def style_button(
+        self, button, bg_color="#4a90e2",
+        hover_color="#357abd", text_color="white"
+    ):
+        """Styles a button with modern colors, border, shadow, and hover effects."""
+        button.config(
+            bg=bg_color,
+            fg=text_color,
+            font=("Segoe UI", 9, "bold"),
+            relief="raised",
+            borderwidth=2,
+            highlightthickness=0,
+            padx=15,
+            pady=8,
+            cursor="hand2",
+            activebackground=hover_color,
+            activeforeground=text_color
+        )
+
+        # Add hover effects
+        def on_enter(e):
+            button.config(bg=hover_color, relief="raised")
+
+        def on_leave(e):
+            button.config(bg=bg_color, relief="raised")
+
+        button.bind("<Enter>", on_enter)
+        button.bind("<Leave>", on_leave)
+
+    def add_button_shadow(self, window_id, offset_x=3, offset_y=3):
+        """Adds a shadow effect behind a button window."""
+        try:
+            coords = self.bg_canvas.coords(window_id)
+            if coords:
+                x, y = coords
+                # Get button bbox (approximate size)
+                bbox = self.bg_canvas.bbox(window_id)
+                if bbox:
+                    x1, y1, x2, y2 = bbox
+                    width = x2 - x1
+                    height = y2 - y1
+                    # Create shadow rectangle slightly offset and blurred
+                    shadow_id = self.bg_canvas.create_rectangle(
+                        x1 + offset_x, y1 + offset_y,
+                        x2 + offset_x, y2 + offset_y,
+                        fill="#000000", outline="", stipple="gray12"
+                    )
+                    # Move shadow behind button
+                    self.bg_canvas.tag_lower(shadow_id, window_id)
+                    return shadow_id
+        except Exception:
+            pass
+        return None
+
+    def add_button_glow(self, window_id, glow_color="#4a90e2", glow_size=20):
+        """Adds a soft, diffused glow effect around a button window using multiple canvas ovals."""
+        try:
+            bbox = self.bg_canvas.bbox(window_id)
+            if bbox:
+                x1, y1, x2, y2 = bbox
+                center_x = (x1 + x2) / 2
+                center_y = (y1 + y2) / 2
+                width = x2 - x1
+                height = y2 - y1
+                
+                glow_ids = []
+                # Create multiple concentric ovals for smooth gradient glow
+                num_layers = 10  # Number of glow layers
+                
+                print(f"Creating glow at center ({center_x}, {center_y}), button size: {width}x{height}")  # Debug
+                
+                for i in range(num_layers):
+                    # Size increases from button edge outward
+                    layer_size = (glow_size * i) / num_layers
+                    # Opacity decreases from center outward
+                    distance_ratio = i / num_layers
+                    
+                    # Calculate stipple pattern (gray0 = transparent, gray100 = opaque)
+                    # Make it more visible - peak opacity in middle layers
+                    if distance_ratio < 0.4:
+                        # Fade in from button edge
+                        stipple_value = int(60 + (distance_ratio / 0.4) * 25)  # 60 to 85
+                    else:
+                        # Fade out to transparent
+                        stipple_value = int(85 - ((distance_ratio - 0.4) / 0.6) * 85)  # 85 to 0
+                    
+                    if stipple_value > 5:  # Only create if visible enough
+                        # Create oval glow
+                        oval_size = layer_size
+                        glow_id = self.bg_canvas.create_oval(
+                            center_x - width/2 - oval_size, 
+                            center_y - height/2 - oval_size,
+                            center_x + width/2 + oval_size, 
+                            center_y + height/2 + oval_size,
+                            fill=glow_color,
+                            outline="",
+                            stipple=f"gray{stipple_value}"  # Semi-transparent
+                        )
+                        glow_ids.append(glow_id)
+                        # Move glow behind button
+                        self.bg_canvas.tag_lower(glow_id, window_id)
+                        print(f"Created glow layer {i}: size={oval_size:.1f}, stipple=gray{stipple_value}")  # Debug
+                
+                # Hide glow initially
+                for glow_id in glow_ids:
+                    self.bg_canvas.itemconfig(glow_id, state="hidden")
+                
+                return glow_ids
+        except Exception as e:
+            print(f"Error creating glow: {e}")
+            import traceback
+            traceback.print_exc()
+        return []
+
     def create_banner(self):
-        """Displays the banner at the top."""
+        """Displays the banner at the top with separator."""
         try:
             image = Image.open(self.resource_path("banner.png"))
-            image = image.resize((600, 150), Image.Resampling.LANCZOS)
+            image = image.resize((800, 150), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(image)
-            banner = tk.Label(self, image=photo)
+            banner = tk.Label(self.bg_canvas, image=photo, bg="#000000", bd=0)
             banner.image = photo
-            banner.pack()
+            banner_window = self.bg_canvas.create_window(400, 75, window=banner)
+            
+            # Add prominent separator bar below banner (drawn after to appear on top)
+            # Create a visible separator bar (10px tall with gradient effect)
+            separator_y = 150
+            # Bottom shadow for depth
+            self.bg_canvas.create_rectangle(
+                0, separator_y + 8, 800, separator_y + 10,
+                fill="#000000", outline="", tags="separator"
+            )
+            # Dark base
+            self.bg_canvas.create_rectangle(
+                0, separator_y + 5, 800, separator_y + 8,
+                fill="#0f0f0f", outline="", tags="separator"
+            )
+            # Main separator bar - darker and more visible
+            self.bg_canvas.create_rectangle(
+                0, separator_y + 2, 800, separator_y + 5,
+                fill="#1f1f1f", outline="", tags="separator"
+            )
+            # Middle accent
+            self.bg_canvas.create_rectangle(
+                0, separator_y + 1, 800, separator_y + 2,
+                fill="#3f3f3f", outline="", tags="separator"
+            )
+            # Top bright line for clear separation
+            self.bg_canvas.create_rectangle(
+                0, separator_y, 800, separator_y + 1,
+                fill="#5f5f5f", outline="", tags="separator"
+            )
+            # Top highlight line
+            self.bg_canvas.create_line(
+                0, separator_y - 1, 800, separator_y - 1,
+                fill="#7f7f7f", width=2, tags="separator"
+            )
+            
+            # Ensure separator is above banner window
+            self.bg_canvas.tag_raise("separator")
         except Exception as e:
             print(f"Error loading banner: {e}")
 
     def create_top_buttons(self):
-        """Creates top buttons for folder selection, uninstallation, and creating shortcuts."""
-        self.top_frame = tk.Frame(self)
-        self.top_frame.pack(pady=10)
+        """Creates top buttons for folder selection, uninstallation."""
+        # Place widgets directly on canvas to avoid frame backgrounds
+        top_y = 200  # Increased from 180 to add more space below banner
+        x_pos = 200  # Starting x position
 
-        # Use pack for consistent geometry management
-        self.folder_button = tk.Button(self.top_frame, text="Select Install Folder", command=self.select_folder)
-        self.folder_button.pack(side="left", padx=10, pady=5)
+        # Folder button
+        self.folder_button = tk.Button(
+            self.bg_canvas, text="Select Install Folder",
+            command=self.select_folder
+        )
+        self.style_button(
+            self.folder_button, bg_color="#4a90e2", hover_color="#357abd"
+        )
+        self.set_custom_cursor(self.folder_button)
+        self.folder_button_window = self.bg_canvas.create_window(x_pos, top_y, window=self.folder_button)
+        self.after(10, lambda: self.add_button_shadow(self.folder_button_window))
         Tooltip(self.folder_button, "Select AgeoftheRing folder.")
+        x_pos += 150
 
-        self.uninstall_button = tk.Button(self.top_frame, text="Uninstall Mod", command=self.uninstall_mod, state="disabled")
-        self.uninstall_button.pack(side="left", padx=10, pady=5)
-        Tooltip(self.uninstall_button, "Remove the mod and delete all its files and folders.")
+        # Uninstall button
+        self.uninstall_button = tk.Button(
+            self.bg_canvas, text="Uninstall Mod",
+            command=self.uninstall_mod, state="disabled"
+        )
+        self.style_button(
+            self.uninstall_button, bg_color="#e74c3c", hover_color="#c0392b"
+        )
+        self.set_custom_cursor(self.uninstall_button)
+        uninstall_window = self.bg_canvas.create_window(x_pos, top_y, window=self.uninstall_button)
+        self.after(10, lambda: self.add_button_shadow(uninstall_window))
+        Tooltip(
+            self.uninstall_button,
+            "Remove the mod and delete all its files and folders."
+        )
+        x_pos += 150
 
-        self.create_shortcut_button = tk.Button(self.top_frame, text="Create Shortcut", command=self.create_shortcut, state="disabled")
+        # Create Shortcut button
+        self.create_shortcut_button = tk.Button(
+            self.bg_canvas, text="Create Shortcut",
+            command=self.create_shortcut, state="disabled"
+        )
+        self.style_button(
+            self.create_shortcut_button,
+            bg_color="#95a5a6", hover_color="#7f8c8d"
+        )
+        self.set_custom_cursor(self.create_shortcut_button)
+        shortcut_window = self.bg_canvas.create_window(x_pos, top_y, window=self.create_shortcut_button)
+        self.after(10, lambda: self.add_button_shadow(shortcut_window))
+        x_pos += 150
+
+        # Language label - position above the dropdown
+        language_x, language_y = x_pos, top_y - 25
+        # Create shadow text first (behind main text)
+        language_shadow = self.bg_canvas.create_text(
+            language_x + 2, language_y + 2, text="Language:", fill="#000000",
+            font=("Segoe UI", 9, "bold"), anchor="center"
+        )
+        # Create main text on top
+        language_label = self.bg_canvas.create_text(
+            language_x, language_y, text="Language:", fill="white",
+            font=("Segoe UI", 9, "bold"), anchor="center"
+        )
+        # Ensure label is visible by raising it above other elements
+        self.bg_canvas.tag_raise(language_label)
 
         # Language dropdown
-        language_frame = tk.Frame(self.top_frame)
-        language_frame.pack(side="left", padx=10, pady=5)
-
-        language_label = tk.Label(language_frame, text="Language:")
-        language_label.pack(side="left")
-
-        self.language_dropdown = ttk.Combobox(language_frame, textvariable=self.language, state="readonly", width=15)
+        self.language_dropdown = ttk.Combobox(
+            self.bg_canvas, textvariable=self.language,
+            state="readonly", width=15
+        )
         self.language_dropdown["values"] = ["English", "Portuguese (BR)"]
-        self.language_dropdown.current(0)  # Set default to English
-        self.language_dropdown.pack(side="left", padx=5)
+        self.language_dropdown.current(0)
+        self.bg_canvas.create_window(x_pos, top_y, window=self.language_dropdown)
         self.language_dropdown.bind("<<ComboboxSelected>>", self.change_language)
         Tooltip(self.language_dropdown, "Change the language of the mod.")
 
     def create_news_section(self):
         """Creates the news section in the middle."""
-        self.news_frame = tk.Frame(self, borderwidth=2, relief="groove", height=150, width=580)
+        news_y = 350
+        news_width = 780
+        news_height = 200
+        self.news_frame = tk.Frame(
+            self.bg_canvas, borderwidth=0, relief="flat",
+            height=news_height, width=news_width, bg="#1a1a1a"
+        )
         self.news_frame.pack_propagate(False)
-        self.news_frame.pack(fill="x", padx=10, pady=10)
+        self.set_custom_cursor(self.news_frame)
+        self.bg_canvas.create_window(400, news_y, window=self.news_frame)
+        
+        # Draw separator border around news section
+        self.draw_separator_border(400, news_y, news_width, news_height, "news_sep")
 
-        tk.Label(self.news_frame, text="Latest News", font=("Arial", 12, "bold")).pack()
+        news_title = tk.Label(
+            self.news_frame, text="Latest News",
+            font=("Segoe UI", 12, "bold"), bg="#1a1a1a", fg="white"
+        )
+        news_title.pack(pady=5)
         self.news_label = HTMLLabel(self.news_frame, html=self.fetch_news())
         self.news_label.pack(fill="both", expand=True, padx=5, pady=5)
 
     def create_bottom_section(self):
-        """Creates the bottom section for Download button, progress bar, and status."""
-        self.bottom_frame = tk.Frame(self)
-        self.bottom_frame.pack(fill="x", padx=10, pady=10)
+        """Creates the bottom section for Download button."""
+        bottom_y = 550
 
-        # Status Label
-        self.status_label = tk.Label(self.bottom_frame, text="Checking mod status...", fg="blue")
-        self.status_label.pack(pady=5)
+        # Bottom info - create frame with black background like news container
+        info_y = 680
+        info_width = 780
+        info_height = 30
 
-        # Button frame for Play and Download buttons
-        self.button_frame = tk.Frame(self.bottom_frame)
-        self.button_frame.pack(pady=5)
-
-        # Play Button (initially hidden)
+        # Play Button - place directly on canvas
+        # Load icon for the button
+        try:
+            icon_image = Image.open(self.resource_path("icons8-one-ring-96.png"))
+            icon_image = icon_image.resize((32, 32), Image.Resampling.LANCZOS)
+            self.play_button_icon = ImageTk.PhotoImage(icon_image)
+        except Exception as e:
+            print(f"Error loading play button icon: {e}")
+            self.play_button_icon = None
+        
         self.play_button = tk.Button(
-            self.button_frame,
-            text="Play Mod",
-            font=("Arial", 10, "bold"),
-            width=15,
-            height=2,
+            self.bg_canvas,
+            text="Play",
+            image=self.play_button_icon if self.play_button_icon else None,
+            compound="left" if self.play_button_icon else None,
             command=self.launch_game
         )
+        # Store reference to prevent garbage collection
+        if self.play_button_icon:
+            self.play_button.image = self.play_button_icon
+        
+        self.style_button(
+            self.play_button, bg_color="#27ae60", hover_color="#229954"
+        )
+        # Set larger font and fixed size for Play Mod button (after style_button to override default)
+        # Use padx/pady for fixed pixel size instead of width/height which scales with font
+        # Adjust padding to center text: use single padx value (Tkinter doesn't support tuple in config)
+        self.play_button.config(
+            font=("Segoe UI", 18, "bold"),
+            padx=30,  # Horizontal padding
+            pady=15,
+            anchor="center",
+            justify="center"
+        )
+        # Set custom cursor on the button to prevent it from changing on hover
+        # Do this after all config to ensure it's not overridden
+        self.set_custom_cursor(self.play_button)
+        # Shadow will be added when button is shown
 
-        # Download Button
+        # Download Button - place directly on canvas
         self.download_button = tk.Button(
-            self.button_frame,
+            self.bg_canvas,
             text="Checking...",
             state="disabled",
-            bg="green",
-            fg="white",
-            font=("Arial", 10, "bold"),
-            width=15,
-            height=2,
+
             command=self.download_and_extract_mod
         )
-        self.download_button.pack(side="left", padx=5)
+        self.style_button(
+            self.download_button,
+            bg_color="#27ae60", hover_color="#229954"
+        )
+        self.set_custom_cursor(self.download_button)
+        self.download_button_window = self.bg_canvas.create_window(
+            400, bottom_y, window=self.download_button
+        )
+        self.after(10, lambda: self.add_button_shadow(self.download_button_window))
 
-        # Progress Bar
-        self.progress = ttk.Progressbar(self.bottom_frame, orient="horizontal", length=400, mode="determinate")
-        self.progress.pack(pady=5)
-        self.progress.pack_forget()
+        # Progress Bar - place directly on canvas
+        self.progress = ttk.Progressbar(
+            self.bg_canvas, orient="horizontal",
+            length=500, mode="determinate"
+        )
+        self.progress_window = self.bg_canvas.create_window(
+            400, bottom_y + 40, window=self.progress
+        )
+        self.bg_canvas.itemconfig(self.progress_window, state="hidden")
 
-        # Bottom info frame (folder path on the left, version on the right)
-        self.bottom_info_frame = tk.Frame(self)
-        self.bottom_info_frame.pack(side="bottom", fill="x", padx=10, pady=10)
+        # Create frame with black background
+        self.info_frame = tk.Frame(
+            self.bg_canvas, borderwidth=0, relief="flat",
+            height=info_height, width=info_width, bg="#000000"
+        )
+        self.info_frame.pack_propagate(False)
+        self.set_custom_cursor(self.info_frame)
+        self.bg_canvas.create_window(400, info_y, window=self.info_frame)
+        
+        # Draw separator border around bottom info frame
+        self.draw_separator_border(400, info_y, info_width, info_height, "info_sep")
 
-        # Folder Label (left)
+        # Folder Label (left) - place in frame
         self.folder_label = tk.Label(
-            self.bottom_info_frame,
+            self.info_frame,
             text="Installation Folder: Not selected",
-            font=("Arial", 10),
+            font=("Segoe UI", 9),
             anchor="w",
-            height=2
+            fg="white",
+            bg="#000000"
         )
-        self.folder_label.pack(side="left", fill="x", expand=True)
+        self.folder_label.pack(side="left", padx=10, pady=5)
 
-        # Launcher Version Label (right)
-        self.version_label = tk.Label(
-            self.bottom_info_frame,
-            text=f"Launcher v{LAUNCHER_VERSION}",
-            font=("Arial", 10),
-            anchor="e",
-            height=2
+        # Status Label (center) - centered relative to entire screen width (400px)
+        self.status_label = tk.Label(
+            self.info_frame,
+            text="Checking mod status...",
+            font=("Segoe UI", 9, "bold"),
+            anchor="center",
+            fg="#4a90e2",
+            bg="#000000"
         )
-        self.version_label.pack(side="right", padx=(10, 0))
+        # Place at screen center (400px from screen left)
+        # Frame is 780px wide, centered at 400px, so frame left is at 10px
+        # Screen center (400px) - frame left (10px) = 390px from frame left
+        self.status_label.place(x=390, rely=0.5, anchor="center")
+
+        # Launcher Version Label (right) - place in frame
+        self.version_label = tk.Label(
+            self.info_frame,
+            text=f"Launcher v{LAUNCHER_VERSION}",
+            font=("Segoe UI", 9),
+            anchor="e",
+            fg="white",
+            bg="#000000"
+        )
+        self.version_label.pack(side="right", padx=10, pady=5)
 
     def fetch_news(self):
         """Fetches the news content."""
@@ -585,9 +1009,10 @@ class ModLauncher(tk.Tk):
                     "The selected folder does not contain an 'aotr' subfolder.\n\n"
                     "Please select the correct Age of the Ring folder that contains the 'aotr' subfolder."
                 )
-                self.status_label.config(
+                self.update_canvas_text(
+                    self.status_label,
                     text="Please select the correct Age of the Ring folder.",
-                    fg="red"
+                    fill="red"
                 )
                 self.hide_download_button()
                 self.hide_play_button()
@@ -653,18 +1078,20 @@ class ModLauncher(tk.Tk):
                     self.show_download_button()
                     self.hide_play_button()
                     self.uninstall_button.config(state="disabled")
-                    self.folder_button.config(state="normal")
+                    self.show_folder_button()
                     self.language_dropdown.config(state="disabled")
                 elif local_version != remote_version:
-                    self.status_label.config(
-                        text=f"Update available: {remote_version} (Installed: {local_version})", fg="orange"
+                    self.update_canvas_text(
+                        self.status_label,
+                        text=f"Update available: {remote_version} (Installed: {local_version})",
+                        fill="orange"
                     )
                     self.download_button.config(text="Download Update", state="normal")
                     self.show_download_button()
                     self.show_play_button()
                     self.uninstall_button.config(state="normal")
                     self.create_shortcut_button.config(state="normal")
-                    self.folder_button.config(state="disabled")
+                    self.hide_folder_button()
                     self.language_dropdown.config(state="readonly")
                 else:
                     self.status_label.config(text=f"Mod is up-to-date ({local_version}).", fg="green")
@@ -672,7 +1099,7 @@ class ModLauncher(tk.Tk):
                     self.show_play_button()
                     self.uninstall_button.config(state="normal")
                     self.create_shortcut_button.config(state="normal")
-                    self.folder_button.config(state="disabled")
+                    self.hide_folder_button()
                     self.language_dropdown.config(state="readonly")
             else:
                 self.status_label.config(text="Failed to check for updates.", fg="red")
@@ -694,19 +1121,88 @@ class ModLauncher(tk.Tk):
 
     def show_download_button(self):
         """Show the download button."""
-        self.download_button.pack(side="left", padx=5)
+        self.bg_canvas.itemconfig(self.download_button_window, state="normal")
 
     def hide_download_button(self):
         """Hide the download button."""
-        self.download_button.pack_forget()
+        self.bg_canvas.itemconfig(self.download_button_window, state="hidden")
 
     def show_play_button(self):
         """Show the play button."""
-        self.play_button.pack(side="left", padx=5)
+        if not hasattr(self, 'play_button_window'):
+            # Position button at bottom_y (550), status label is at bottom_y - 70 (480)
+            self.play_button_window = self.bg_canvas.create_window(
+                400, 550, window=self.play_button, anchor="center"
+            )
+            # Add shadow effect
+            self.after(10, lambda: self.add_button_shadow(self.play_button_window))
+            # Add glow effect for hover
+            self.after(20, lambda: self._setup_play_button_glow())
+        self.bg_canvas.itemconfig(self.play_button_window, state="normal")
+
+    def _setup_play_button_glow(self):
+        """Sets up the glow effect for the play button and hover handlers."""
+        if hasattr(self, 'play_button_window'):
+            # Create glow effect (green to match button, larger and more visible)
+            self.play_button_glow_ids = self.add_button_glow(
+                self.play_button_window, glow_color="#2ecc71", glow_size=25  # Brighter green, larger size
+            )
+            
+            # Add hover handlers to show/hide glow
+            def on_enter(e):
+                print("Hover ENTER detected")  # Debug
+                if hasattr(self, 'play_button_glow_ids') and self.play_button_glow_ids:
+                    print(f"Showing glow: {self.play_button_glow_ids}")  # Debug
+                    for glow_id in self.play_button_glow_ids:
+                        self.bg_canvas.itemconfig(glow_id, state="normal")
+                    # Force canvas update
+                    self.bg_canvas.update_idletasks()
+                else:
+                    print("No glow IDs available")  # Debug
+            
+            def on_leave(e):
+                print("Hover LEAVE detected")  # Debug
+                if hasattr(self, 'play_button_glow_ids') and self.play_button_glow_ids:
+                    for glow_id in self.play_button_glow_ids:
+                        self.bg_canvas.itemconfig(glow_id, state="hidden")
+                    # Force canvas update
+                    self.bg_canvas.update_idletasks()
+            
+            # Bind to the button widget for hover detection
+            self.play_button.bind("<Enter>", on_enter)
+            self.play_button.bind("<Leave>", on_leave)
+            # Also try binding to Motion events
+            self.play_button.bind("<Motion>", lambda e: on_enter(e))
+            
+            # Debug: Print if glow was created
+            if self.play_button_glow_ids:
+                print(f"Glow created with {len(self.play_button_glow_ids)} items, IDs: {self.play_button_glow_ids}")
+                # Test: Temporarily show glow to verify it's visible
+                print("Testing glow visibility - showing for 2 seconds...")
+                for glow_id in self.play_button_glow_ids:
+                    self.bg_canvas.itemconfig(glow_id, state="normal")
+                self.after(2000, lambda: [self.bg_canvas.itemconfig(glow_id, state="hidden") for glow_id in self.play_button_glow_ids])
+            else:
+                print("Warning: No glow items created")
 
     def hide_play_button(self):
         """Hide the play button."""
-        self.play_button.pack_forget()
+        if hasattr(self, 'play_button_window'):
+            self.bg_canvas.itemconfig(self.play_button_window, state="hidden")
+            # Also hide glow if it exists
+            if hasattr(self, 'play_button_glow_ids'):
+                for glow_id in self.play_button_glow_ids:
+                    self.bg_canvas.itemconfig(glow_id, state="hidden")
+
+    def show_folder_button(self):
+        """Show the folder button."""
+        if hasattr(self, 'folder_button_window'):
+            self.bg_canvas.itemconfig(self.folder_button_window, state="normal")
+
+    def hide_folder_button(self):
+        """Hide the folder button."""
+        if hasattr(self, 'folder_button_window'):
+            self.bg_canvas.itemconfig(self.folder_button_window, state="hidden")
 
     def change_language(self, event=None):
         """Change the language of the mod."""
@@ -934,12 +1430,12 @@ class ModLauncher(tk.Tk):
 
         try:
             # Disable folder selection during download/installation
-            self.folder_button.config(state="disabled")
+            self.hide_folder_button()
 
             # Hide the Download button during the download process
             self.hide_download_button()
             self.hide_play_button()
-            self.progress.pack()  # Show progress bar
+            self.bg_canvas.itemconfig(self.progress_window, state="normal")
 
             # Check for existing AOTR RAR file from previous failed installation
             existing_rar_path = os.path.join(install_path, "aotr.rar")
@@ -1118,11 +1614,11 @@ class ModLauncher(tk.Tk):
             # Update status and enable uninstall button
             self.status_label.config(text="Mod installed successfully!", fg="green")
             self.uninstall_button.config(state="normal")
-            self.progress.pack_forget()
+            self.bg_canvas.itemconfig(self.progress_window, state="hidden")
             self.save_folder(install_path, installed=True)
 
             # Re-enable folder selection
-            self.folder_button.config(state="normal")
+            self.show_folder_button()
 
             # Apply the language
             self.change_language()
@@ -1138,12 +1634,12 @@ class ModLauncher(tk.Tk):
 
         except Exception as e:
             self.status_label.config(text=f"Error: {e}", fg="red")
-            self.progress.pack_forget()
+            self.bg_canvas.itemconfig(self.progress_window, state="hidden")
             self.show_download_button()
             self.hide_play_button()
 
             # Re-enable folder selection on error
-            self.folder_button.config(state="normal")
+            self.show_folder_button()
 
     def download_and_install_package(self, install_path, download_url, version_label, version_number):
         """Helper method to download and install a specific package."""
@@ -1341,15 +1837,19 @@ class ModLauncher(tk.Tk):
                 existing_rar_path = os.path.join(install_path, "aotr.rar")
                 if os.path.exists(existing_rar_path):
                     print(f"Found existing AOTR RAR file: {existing_rar_path}")
-                    self.status_label.config(
-                        text="Found existing AOTR RAR file. Extracting...", fg="blue"
+                    self.update_canvas_text(
+                        self.status_label,
+                        text="Found existing AOTR RAR file. Extracting...",
+                        fill="blue"
                     )
                     self.update()
                     return True, existing_rar_path
                 else:
-                    self.status_label.config(
+                    self.update_canvas_text(
+                        self.status_label,
                         text=f"Realms in Exile requires AOTR {required_version}. "
-                             f"Current version: {current_version}. Downloading...", fg="blue"
+                             f"Current version: {current_version}. Downloading...",
+                        fill="blue"
                     )
                     self.update()
 
@@ -1538,8 +2038,10 @@ class ModLauncher(tk.Tk):
                         print(f"Deleted shortcut: {shortcut_path}")
 
                 # Reset UI and clear registry
-                self.status_label.config(
-                    text="Mod uninstalled successfully. All files and folders were removed.", fg="green"
+                self.update_canvas_text(
+                    self.status_label,
+                    text="Mod uninstalled successfully. All files and folders were removed.",
+                    fill="green"
                 )
                 self.folder_label.config(text="Installation Folder: Not selected")
                 self.install_folder.set("")
@@ -1550,7 +2052,7 @@ class ModLauncher(tk.Tk):
                 self.hide_play_button()
                 self.uninstall_button.config(state="disabled")
                 self.create_shortcut_button.config(state="disabled")
-                self.folder_button.config(state="normal")
+                self.show_folder_button()
                 self.language_dropdown.config(state="disabled")
 
             except Exception as e:
@@ -1723,7 +2225,7 @@ class ModLauncher(tk.Tk):
 
         except Exception as e:
             messagebox.showerror("Update Failed", f"Failed to update the launcher: {e}")
-            self.progress.pack_forget()
+            self.bg_canvas.itemconfig(self.progress_window, state="hidden")
             self.exit_update_mode()
 
     def is_newer_version(self, current_version, latest_version):
@@ -1754,7 +2256,7 @@ class ModLauncher(tk.Tk):
             pass
         # show progress bar if not visible
         try:
-            self.progress.pack()
+            self.bg_canvas.itemconfig(self.progress_window, state="normal")
         except Exception:
             pass
 
@@ -1777,7 +2279,7 @@ class ModLauncher(tk.Tk):
         except Exception:
             pass
         try:
-            self.progress.pack_forget()
+            self.bg_canvas.itemconfig(self.progress_window, state="hidden")
         except Exception:
             pass
 

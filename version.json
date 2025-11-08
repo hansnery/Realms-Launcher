@@ -1,4 +1,5 @@
 {
-  "version": "0.7.3",
-  "launcher_version": "1.0.2"
+  "version": "0.8.5.1",
+  "launcher_version": "1.0.6",
+  "required_aotr_version": "9.1.4"
 }
