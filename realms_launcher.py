@@ -1203,7 +1203,20 @@ class ModLauncher(tk.Tk):
         self.after(10, lambda: self.add_button_shadow(self.folder_button_window))
         x_pos += 150
 
-        # Uninstall button
+        # Create Shortcut button (moved to be left of Uninstall; color matches Folder button)
+        self.create_shortcut_button = tk.Button(
+            self.bg_canvas, text="Create Shortcut",
+            command=self.create_shortcut, state="disabled"
+        )
+        self.style_button(
+            self.create_shortcut_button, bg_color="#4a90e2", hover_color="#357abd"
+        )
+        self.set_custom_cursor(self.create_shortcut_button)
+        self.create_shortcut_button_window = self.bg_canvas.create_window(x_pos, top_y, window=self.create_shortcut_button)
+        self.after(10, lambda: self.add_button_shadow(self.create_shortcut_button_window))
+        x_pos += 150
+
+        # Uninstall button (moved to the right position)
         self.uninstall_button = tk.Button(
             self.bg_canvas, text="Uninstall Mod",
             command=self.uninstall_mod, state="disabled"
@@ -1214,20 +1227,6 @@ class ModLauncher(tk.Tk):
         self.set_custom_cursor(self.uninstall_button)
         self.uninstall_button_window = self.bg_canvas.create_window(x_pos, top_y, window=self.uninstall_button)
         self.after(10, lambda: self.add_button_shadow(self.uninstall_button_window))
-        x_pos += 150
-
-        # Create Shortcut button
-        self.create_shortcut_button = tk.Button(
-            self.bg_canvas, text="Create Shortcut",
-            command=self.create_shortcut, state="disabled"
-        )
-        self.style_button(
-            self.create_shortcut_button,
-            bg_color="#95a5a6", hover_color="#7f8c8d"
-        )
-        self.set_custom_cursor(self.create_shortcut_button)
-        self.create_shortcut_button_window = self.bg_canvas.create_window(x_pos, top_y, window=self.create_shortcut_button)
-        self.after(10, lambda: self.add_button_shadow(self.create_shortcut_button_window))
         # Hide buttons initially since they start disabled
         self.hide_uninstall_button()
         self.hide_create_shortcut_button()
@@ -2564,32 +2563,44 @@ class ModLauncher(tk.Tk):
         return "0.0.0"
 
     def get_aotr_version_from_str_file(self, install_path):
-        """Parses AOTR version from the lotr.str file."""
+        """Parses AOTR version from the lotr.str file with robust matching."""
         try:
-            aotr_data_path = os.path.join(install_path, "aotr", "data", "lotr.str")
-            if not os.path.exists(aotr_data_path):
-                print(f"AOTR data file not found: {aotr_data_path}")
+            # Only read from aotr/data/lotr.str (no fallback)
+            file_path = os.path.join(install_path, "aotr", "data", "lotr.str")
+            if not os.path.exists(file_path):
+                print(f"AOTR data file not found: {file_path}")
                 return "0.0.0"
 
-            with open(aotr_data_path, 'r', encoding='utf-8', errors='ignore') as file:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
                 lines = file.readlines()
 
-                # Look for the active (uncommented) version line
-                import re
-                version_pattern = r'"Age of the Ring Version (\d+\.\d+(?:\.\d+)?)"'
+                # Version patterns:
+                # - Allow quotes optional
+                # - Case-insensitive for the phrase
+                # - Capture versions like X, X.Y, X.Y.Z (any parts length, realistically 2-3)
+                # - Allow extra text after the version inside quotes (e.g., PT-BR translation note)
+                generic_pattern = r'["\']?Age of the Ring Version\s+(\d+(?:\.\d+)*)\b[^"\']*["\']?'
+                # PT-BR specific formatting requested:
+                ptbr_suffix_pattern = r'["\']?Age of the Ring Version\s+(\d+(?:\.\d+)*)\b\s*-\s*Tradu(?:ç|c)[aã]o\s+por\s+Hans\s+Oliveira\s+\(Annatar_BR\)[^"\']*["\']?'
+
+                # If user selected Portuguese in launcher, try PT-BR specific first
+                selected_lang = ""
+                try:
+                    selected_lang = (self.language.get() or "").lower()
+                except Exception:
+                    pass
+                patterns = [ptbr_suffix_pattern, generic_pattern] if "portuguese" in selected_lang else [generic_pattern]
 
                 for line in lines:
-                    line = line.strip()
-                    # Skip commented lines (lines starting with //)
-                    if line.startswith('//'):
+                    # Skip commented lines (allow leading whitespace)
+                    if re.match(r'^\s*//', line):
                         continue
-
-                    # Look for the version pattern in non-commented lines
-                    match = re.search(version_pattern, line)
-                    if match:
-                        version = match.group(1)
-                        print(f"Found AOTR version in lotr.str: {version}")
-                        return version
+                    for pat in patterns:
+                        match = re.search(pat, line, flags=re.IGNORECASE)
+                        if match:
+                            version = match.group(1)
+                            print(f"Found AOTR version in lotr.str ({os.path.basename(file_path)}): {version}")
+                            return version
 
                 print("Could not find active AOTR version in lotr.str file")
                 return "0.0.0"
