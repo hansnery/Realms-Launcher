@@ -23,17 +23,17 @@ import pathlib
 # Config flags
 # =========================
 # If True, the updater will run elevated (UAC prompt) to write into protected locations.
-USE_ELEVATED_UPDATER = False
+USE_ELEVATED_UPDATER = True
 
 # =========================
 # Constants
 # =========================
-MOD_INFO_URL = "https://realmsinexile.s3.us-east-005.backblazeb2.com/version_beta.json"
+MOD_INFO_URL = "https://realmsinexile.s3.us-east-005.backblazeb2.com/version.json" # Use version_beta.json for tests
 BASE_MOD_VERSION = "0.8.0"  # Base version of the mod
 BASE_MOD_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms.zip"  # Base mod download
 UPDATE_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_update.zip"  # Update package
 AOTR_RAR_URL = "https://f005.backblazeb2.com/file/RealmsInExile/aotr.rar"  # AOTR download
-LAUNCHER_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_launcher_beta.zip"  # Launcher update package
+LAUNCHER_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_launcher.zip"  # Use realms_launcher_beta.zip for tests
 NEWS_URL = "https://raw.githubusercontent.com/hansnery/Realms-Launcher/refs/heads/main/news.html"
 LAUNCHER_VERSION = "1.0.7"  # Updated launcher version
 REG_PATH = r"SOFTWARE\REALMS_Launcher"
@@ -91,6 +91,18 @@ def _python_cmd() -> list:
     return [sys.executable]
 
 
+def _can_write_to_dir(directory: str) -> bool:
+    """Best-effort check if we can write into the given directory."""
+    try:
+        test_path = os.path.join(directory, f".write_test_{os.getpid()}.tmp")
+        with open(test_path, "w", encoding="utf-8") as f:
+            f.write("ok")
+        os.remove(test_path)
+        return True
+    except Exception:
+        return False
+
+
 def _start_detached(cmd: list):
     # Start a detached process on Windows
     DETACHED_PROCESS = 0x00000008
@@ -115,7 +127,7 @@ def _write_updater_ps1(ps1_path: str):
 param(
     [string]$TargetDir,
     [string]$StagedDir,
-    [int]$MainPid,
+    [string]$MainPid,
     [string]$RelaunchPath,
     [string]$RelaunchArgs,
     [string]$RelaunchCwd,
@@ -139,10 +151,30 @@ function Write-Log {
     } catch {}
 }
 
+# Wait for a file to be unlocked (no sharing) for up to TimeoutMs
+function Wait-Unlocked {
+    param([string]$Path, [int]$TimeoutMs = 15000)
+    try {
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($true) {
+            try {
+                $fs = [System.IO.File]::Open($Path, 'Open', 'ReadWrite', 'None')
+                $fs.Close()
+                return $true
+            } catch {
+                if ($sw.ElapsedMilliseconds -gt $TimeoutMs) { return $false }
+                Start-Sleep -Milliseconds 200
+            }
+        }
+    } catch { return $false }
+}
+
 # Ensure log file exists
 try {
     New-Item -ItemType File -Force -Path $LogPath | Out-Null
 } catch {}
+
+try { Start-Transcript -Path $LogPath -Append | Out-Null } catch {}
 
 Write-Log "==== Updater started ===="
 Write-Log "TargetDir=$TargetDir"
@@ -154,10 +186,11 @@ Write-Log "RelaunchCwd=$RelaunchCwd"
 Write-Log "PSVersion=$($PSVersionTable.PSVersion)"
 
 # Wait for main process to exit (best effort)
-if ($MainPid -gt 0) {
+try { $pidInt = [int]$MainPid } catch { $pidInt = 0 }
+if ($pidInt -gt 0) {
     try {
-        Write-Log "Waiting for PID $MainPid to exit..."
-        Wait-Process -Id $MainPid -ErrorAction SilentlyContinue
+        Write-Log "Waiting for PID $pidInt to exit..."
+        Wait-Process -Id $pidInt -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 500
     } catch {
         Write-Log "Wait-Process threw: $($_.Exception.Message)"
@@ -173,6 +206,12 @@ function Copy-With-Retry {
             if (Test-Path -LiteralPath $src) {
                 if (-not (Test-Path -LiteralPath $dst)) {
                     try { New-Item -ItemType Directory -Force -Path $dst | Out-Null } catch {}
+                }
+                # Ensure target exe is unlocked before attempting a mirror
+                if ($RelaunchPath) {
+                    Write-Log "Waiting for target EXE to unlock: $RelaunchPath"
+                    $unlocked = Wait-Unlocked -Path $RelaunchPath -TimeoutMs (2000 + 300 * $i)
+                    Write-Log "Unlock wait result = $unlocked"
                 }
                 Write-Log "robocopy try #$i"
                 # /MIR mirror tree, /R:2 /W:0 quick retries, /NFL/NDL quiets file/dir lists
@@ -195,6 +234,38 @@ function Copy-With-Retry {
 
 $ok = Copy-With-Retry -src $StagedDir -dst $TargetDir
 Write-Log "Copy result = $ok"
+
+# Fallback: try to copy just the launcher EXE if robocopy mirroring failed
+if (-not $ok -and $RelaunchPath) {
+    try {
+        $exeName = Split-Path -Leaf $RelaunchPath
+        $srcExe  = Join-Path $StagedDir $exeName
+        if (Test-Path -LiteralPath $srcExe) {
+            Write-Log "Fallback: Copy-Item `"$srcExe`" -> `"$RelaunchPath`""
+            try { attrib -R $RelaunchPath 2>$null } catch {}
+            $unlocked = Wait-Unlocked -Path $RelaunchPath -TimeoutMs 8000
+            Write-Log "Fallback unlock wait = $unlocked"
+            Copy-Item -LiteralPath $srcExe -Destination $RelaunchPath -Force
+            $ok = $true
+        } else {
+            # Search for any single EXE beneath staged dir
+            $exeCandidates = Get-ChildItem -LiteralPath $StagedDir -Recurse -Filter *.exe -ErrorAction SilentlyContinue
+            if ($exeCandidates.Count -eq 1) {
+                $srcExe = $exeCandidates[0].FullName
+                Write-Log "Fallback: found single EXE candidate at $srcExe"
+                try { attrib -R $RelaunchPath 2>$null } catch {}
+                $unlocked = Wait-Unlocked -Path $RelaunchPath -TimeoutMs 8000
+                Write-Log "Fallback unlock wait = $unlocked"
+                Copy-Item -LiteralPath $srcExe -Destination $RelaunchPath -Force
+                $ok = $true
+            } else {
+                Write-Log "Fallback: staged EXE not found at $srcExe and no unique candidate under $StagedDir"
+            }
+        }
+    } catch {
+        Write-Log "Fallback copy failed: $($_.Exception.Message)"
+    }
+}
 
 # Cleanup staged folder (best effort)
 try {
@@ -226,11 +297,135 @@ if ($ok -and $RelaunchPath) {
 }
 
 Write-Log "==== Updater finished ===="
+try { Stop-Transcript | Out-Null } catch {}
 exit 0
 '''
     with open(ps1_path, 'w', encoding='utf-8') as f:
         f.write(ps1.strip())
 
+
+def _write_updater_cmd(cmd_path: str):
+    """
+    Write a CMD-based updater that doesn't rely on PowerShell script policy.
+    Args (quoted): %1=TargetDir %2=StagedDir %3=MainPid %4=RelaunchPath %5=RelaunchArgs %6=RelaunchCwd %7=LogPath
+    """
+    lines = [
+        "@echo off",
+        "setlocal EnableExtensions EnableDelayedExpansion",
+        "set \"TargetDir=%~1\"",
+        "set \"StagedDir=%~2\"",
+        "set \"MainPid=%~3\"",
+        "set \"RelaunchPath=%~4\"",
+        "set \"RelaunchArgs=%~5\"",
+        "set \"RelaunchCwd=%~6\"",
+        "set \"LogPath=%~7\"",
+        "call :log ==== Updater(CMD) started ====",
+        "call :log TargetDir=!TargetDir!",
+        "call :log StagedDir=!StagedDir!",
+        "call :log MainPid=!MainPid!",
+        "call :log RelaunchPath=!RelaunchPath!",
+        "call :log RelaunchArgs=!RelaunchArgs!",
+        "call :log RelaunchCwd=!RelaunchCwd!",
+        "",
+        "REM Wait for main process to exit",
+        "if not \"%MainPid%\"==\"\" (",
+        "  call :log Waiting for PID %MainPid% to exit...",
+        "  :waitLoop",
+        "  tasklist /FI \"PID eq %MainPid%\" | find \"%MainPid%\" >nul",
+        "  if %errorlevel%==0 (",
+        "    timeout /t 1 /nobreak >nul",
+        "    goto :waitLoop",
+        "  )",
+        ")",
+        "",
+        "REM Mirror staged -> target",
+        "set \"ok=0\"",
+        "call :log robocopy starting",
+        "robocopy \"%StagedDir%\" \"%TargetDir%\" /MIR /R:2 /W:0 /NFL /NDL /NJH /NJS /NP >> \"%LogPath%\" 2>&1",
+        "set \"rc=%ERRORLEVEL%\"",
+        "call :log robocopy exit code = %rc%",
+        "for /f \"tokens=1\" %%A in (\"%rc%\") do set \"rc=%%~A\"",
+        "REM robocopy success codes 0..7",
+        "if \"%rc%\"==\"0\" set ok=1",
+        "if \"%rc%\"==\"1\" set ok=1",
+        "if \"%rc%\"==\"2\" set ok=1",
+        "if \"%rc%\"==\"3\" set ok=1",
+        "if \"%rc%\"==\"4\" set ok=1",
+        "if \"%rc%\"==\"5\" set ok=1",
+        "if \"%rc%\"==\"6\" set ok=1",
+        "if \"%rc%\"==\"7\" set ok=1",
+        "",
+        "REM Fallback: copy only the EXE",
+        "if not \"%ok%\"==\"1\" (",
+        "  for %%X in (\"%RelaunchPath%\") do set \"ExeName=%%~nxX\"",
+        "  set \"SrcExe=\"",
+        "  for /f \"delims=\" %%F in ('dir /b /s \"%StagedDir%\\%ExeName%\" 2^>nul') do (",
+        "    set \"SrcExe=%%~fF\"",
+        "    goto :srcFound",
+        "  )",
+        "  for /f \"delims=\" %%F in ('dir /b /s \"%StagedDir%\\*.exe\" 2^>nul') do (",
+        "    set \"SrcExe=%%~fF\"",
+        "    goto :srcFound",
+        "  )",
+        "  :srcFound",
+        "  if not defined SrcExe (",
+        "    call :log Fallback: no EXE found under staged",
+        "  ) else (",
+        "    call :log Fallback: using EXE \"%SrcExe%\"",
+        "    set tries=0",
+        "    :replaceLoop",
+        "    set /a tries+=1",
+        "    call :log Attempt !tries! to replace EXE",
+        "    attrib -R \"%RelaunchPath%\" >nul 2>&1",
+        "    del /F /Q \"%RelaunchPath%\" >> \"%LogPath%\" 2>&1",
+        "    if exist \"%RelaunchPath%\" (",
+        "      timeout /t 1 /nobreak >nul",
+        "    ) else (",
+        "      for %%S in (\"%SrcExe%\") do set \"SrcSize=%%~zS\"",
+        "      copy /Y \"%SrcExe%\" \"%RelaunchPath%\" >> \"%LogPath%\" 2>&1",
+        "      for %%T in (\"%RelaunchPath%\") do set \"DstSize=%%~zT\"",
+        "      call :log Fallback copy sizes: src=!SrcSize! dst=!DstSize!",
+        "      if %errorlevel%==0 if \"!SrcSize!\"==\"!DstSize!\" (",
+        "        set ok=1",
+        "      ) else (",
+        "        timeout /t 1 /nobreak >nul",
+        "      )",
+        "    )",
+        "    if not \"%ok%\"==\"1\" (",
+        "      if !tries! LSS 20 goto :replaceLoop",
+        "    )",
+        "  )",
+        ")",
+        "",
+        "REM Cleanup staged (only if success)",
+        "if \"%ok%\"==\"1\" (",
+        "  if exist \"%StagedDir%\" (",
+        "    call :log Removing staged dir...",
+        "    rmdir /S /Q \"%StagedDir%\" >> \"%LogPath%\" 2>&1",
+        "  )",
+        ") else (",
+        "  call :log Update failed; keeping staged at \"%StagedDir%\"",
+        ")",
+        "",
+        "REM Relaunch only on success",
+        "if \"%ok%\"==\"1\" (",
+        "  call :log Relaunching...",
+        "  pushd \"%RelaunchCwd%\"",
+        "  start \"\" \"%RelaunchPath%\" %RelaunchArgs%",
+        "  popd",
+        ") else (",
+        "  call :log Relaunch skipped due to failed update",
+        ")",
+        "call :log ==== Updater finished ====",
+        "exit /b 0",
+        "",
+        ":log",
+        ">> \"%LogPath%\" echo [%date% %time%] %*",
+        "exit /b 0",
+        "",
+    ]
+    with open(cmd_path, "w", encoding="utf-8", newline="\r\n") as f:
+        f.write("\r\n".join(lines))
 
 class Tooltip:
     """A simple tooltip class for Tkinter widgets."""
@@ -351,12 +546,22 @@ class ModLauncher(tk.Tk):
         if len(entries) == 1 and entries[0].is_dir():
             staged_dir = str(entries[0])
 
-        # After extraction:
+        # If the update was zipped with nested folders (e.g. "dist/realms_launcher.exe"),
+        # find the folder that actually contains the launcher executable and stage from there.
         try:
-            with open(os.path.join(staged_dir, "_staged_ok.txt"), "w", encoding="utf-8") as f:
-                f.write(f"staged at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            exe_basename = os.path.basename(_launcher_path()) if _is_frozen() else "realms_launcher.exe"
+            found_parent = None
+            for root, dirs, files in os.walk(staged_dir):
+                if exe_basename in files:
+                    found_parent = root
+                    break
+            if found_parent and os.path.normpath(found_parent) != os.path.normpath(staged_dir):
+                staged_dir = found_parent
         except Exception:
+            # Best effort only; keep current staged_dir on any error
             pass
+
+        # After extraction: nothing else needed; return the staged directory
 
         return staged_dir
 
@@ -2965,6 +3170,8 @@ class ModLauncher(tk.Tk):
             temp_root = os.path.dirname(os.path.dirname(staged_dir))  # parent of 'staged'
             ps1_path = os.path.join(temp_root, "do_update.ps1")
             _write_updater_ps1(ps1_path)
+            cmd_path = os.path.join(temp_root, "do_update.cmd")
+            _write_updater_cmd(cmd_path)
 
             # Path for target
             target_dir = _launcher_dir()
@@ -2989,39 +3196,45 @@ class ModLauncher(tk.Tk):
 
             relaunch_cwd = target_dir  # important for relative assets
 
-            # 3) Build PowerShell argument list
-            base_args = [
-                "-NoProfile", "-ExecutionPolicy", "Bypass",
-                "-File", ps1_path,
-                "-TargetDir", target_dir,
-                "-StagedDir", staged_dir,
-                "-MainPid", str(os.getpid()),
-                "-RelaunchPath", relaunch_path,
-                "-RelaunchArgs", relaunch_args,
-                "-RelaunchCwd", relaunch_cwd,
-                "-LogPath", log_path,
+            # 3) Build CMD argument list (more reliable on systems with script policy)
+            cmd_args = [
+                "/c",
+                cmd_path,
+                target_dir,
+                staged_dir,
+                str(os.getpid()),
+                relaunch_path,
+                relaunch_args,
+                relaunch_cwd,
+                log_path,
             ]
 
             # 4) Launch updater (optionally elevated)
-            if USE_ELEVATED_UPDATER:
+            use_elevated = USE_ELEVATED_UPDATER or (not _can_write_to_dir(target_dir))
+            if use_elevated:
+                # Inform user a UAC prompt may appear
+                try:
+                    self.status_label.config(text="Requesting Windows permission to update...", fg="blue")
+                    self.update()
+                except Exception:
+                    pass
                 # When elevating with ShellExecute, we must pass a single string of args
-                def _join_ps_args(args):
+                def _join_cmd_args(args):
                     out = []
                     for a in args:
                         if a is None:
                             continue
-                        # Quote only when needed
-                        if (' ' in a or '"' in a) and not a.startswith('-'):
-                            a = '"' + a.replace('"', '""') + '"'
+                        # Always quote because we're invoking cmd.exe
+                        a = '"' + a.replace('"', '""') + '"'
                         out.append(a)
                     return " ".join(out)
 
-                arg_string = _join_ps_args(base_args)
+                arg_string = _join_cmd_args(cmd_args)
                 ctypes.windll.shell32.ShellExecuteW(
-                    None, "runas", "powershell.exe", arg_string, None, 1
+                    None, "runas", "cmd.exe", arg_string, None, 1
                 )
             else:
-                _start_detached(["powershell.exe"] + base_args)
+                _start_detached(["cmd.exe"] + cmd_args)
 
             # 5) Inform and quit so the updater can replace files
             self.status_label.config(text="Applying update... The launcher will close and reopen.", fg="blue")

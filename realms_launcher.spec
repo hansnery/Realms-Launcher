@@ -4,8 +4,8 @@
 a = Analysis(
     ['realms_launcher.py'],
     pathex=[],
-    binaries=[],
-    datas=[('aotr_fs.ico', '.'), ('banner.png', '.')],
+    binaries=[('C:\\Windows\\System32\\vcruntime140.dll', '.'), ('C:\\Windows\\System32\\vcruntime140_1.dll', '.'), ('C:\\Windows\\System32\\msvcp140.dll', '.')],
+    datas=[('aotr_fs.ico', '.'), ('banner.png', '.'), ('background.jpg', '.'), ('icons8-one-ring-96.png', '.'), ('SCCpointer.cur', '.'), ('SCCRepair.ani', '.'), ('SCCAttMagic.ani', '.'), ('magnify.ani', '.'), ('OneRing.ani', '.'), ('ringbearer', 'ringbearer')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -26,9 +26,9 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
-    runtime_tmpdir=None,
+    runtime_tmpdir='.',  # extract next to the exe to avoid Temp/AV issues
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
