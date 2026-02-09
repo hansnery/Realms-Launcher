@@ -1,3 +1,25 @@
+"""Compatibility entrypoint.
+
+This repository now uses a `src/` layout. This shim keeps `python realms_launcher.py`
+working in development (and provides a simple PyInstaller entrypoint if needed).
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+repo_root = Path(__file__).resolve().parent
+src_dir = repo_root / "src"
+if str(src_dir) not in sys.path:
+    sys.path.insert(0, str(src_dir))
+
+from realms_launcher.__main__ import main  # noqa: E402, F401  # type: ignore[import-not-found]
+
+
+if __name__ == "__main__":
+    main()
+
 import os
 import sys
 import json
@@ -19,25 +41,24 @@ import ctypes  # admin privileges check
 import tempfile
 import pathlib
 
-from ..constants import (
-    AOTR_RAR_URL,
-    BASE_MOD_VERSION,
-    BASE_MOD_ZIP_URL,
-    LAUNCHER_VERSION,
-    LAUNCHER_ZIP_URL,
-    MOD_INFO_URL,
-    NEWS_URL,
-    REG_PATH,
-    UPDATE_ZIP_URL,
-    USE_ELEVATED_UPDATER,
-)
-from ..services import install_service
-from ..services.aotr_service import get_aotr_version_from_lotr_str
-from ..services import launcher_update_service
-from ..services.version_service import fetch_remote_version_info, is_lower_version as svc_is_lower_version, is_latest_newer
-from . import layout as ui_layout
-from .assets import resource_path as resolve_resource_path
-from .widgets.tooltip import Tooltip
+# =========================
+# Config flags
+# =========================
+# If True, the updater will run elevated (UAC prompt) to write into protected locations.
+USE_ELEVATED_UPDATER = True
+
+# =========================
+# Constants
+# =========================
+MOD_INFO_URL = "https://realmsinexile.s3.us-east-005.backblazeb2.com/version.json" # Use version_beta.json for tests
+BASE_MOD_VERSION = "0.8.0"  # Base version of the mod
+BASE_MOD_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms.zip"  # Base mod download
+UPDATE_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_update.zip"  # Update package
+AOTR_RAR_URL = "https://f005.backblazeb2.com/file/RealmsInExile/aotr.rar"  # AOTR download
+LAUNCHER_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_launcher.zip"  # Use realms_launcher_beta.zip for tests
+NEWS_URL = "https://raw.githubusercontent.com/hansnery/Realms-Launcher/refs/heads/main/news.html"
+LAUNCHER_VERSION = "1.0.7"  # Updated launcher version
+REG_PATH = r"SOFTWARE\REALMS_Launcher"
 
 
 # =========================
@@ -428,6 +449,41 @@ def _write_updater_cmd(cmd_path: str):
     with open(cmd_path, "w", encoding="utf-8", newline="\r\n") as f:
         f.write("\r\n".join(lines))
 
+class Tooltip:
+    """A simple tooltip class for Tkinter widgets."""
+    def __init__(self, widget, text=""):
+        self.widget = widget
+        self.text = text
+        self.tooltip_window = None
+        self.widget.bind("<Enter>", self.show_tooltip)
+        self.widget.bind("<Leave>", self.hide_tooltip)
+
+    def show_tooltip(self, event):
+        """Display the tooltip near the widget."""
+        x = event.x_root + 10
+        y = event.y_root + 10
+
+        self.tooltip_window = tk.Toplevel(self.widget)
+        self.tooltip_window.wm_overrideredirect(True)  # Remove window decorations
+        self.tooltip_window.wm_geometry(f"+{x}+{y}")
+
+        label = tk.Label(
+            self.tooltip_window,
+            text=self.text,
+            background="lightyellow",
+            relief="solid",
+            borderwidth=1,
+            font=("Arial", 10)
+        )
+        label.pack()
+
+    def hide_tooltip(self, event):
+        """Hide the tooltip."""
+        if self.tooltip_window:
+            self.tooltip_window.destroy()
+            self.tooltip_window = None
+
+
 class ModLauncher(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -575,7 +631,48 @@ class ModLauncher(tk.Tk):
                 )
 
     def resource_path(self, relative_path):
-        return resolve_resource_path(relative_path)
+        """Get an absolute path to a bundled/dev resource.
+
+        Supports both:
+        - PyInstaller (via sys._MEIPASS)
+        - Running from source with assets in the repo `assets/` folder
+        """
+        base_dir = sys._MEIPASS if hasattr(sys, "_MEIPASS") else os.path.dirname(os.path.abspath(__file__))
+
+        # 1) Direct lookup (for already-updated call sites or future assets)
+        direct = os.path.join(base_dir, relative_path)
+        if os.path.exists(direct):
+            return direct
+
+        # 2) Back-compat for old call sites after repo re-org
+        filename = os.path.basename(relative_path)
+        _, ext = os.path.splitext(filename.lower())
+
+        # Common buckets by extension/name
+        if filename.lower() == "aotr_fs.ico":
+            candidates = ["assets/icons/aotr_fs.ico"]
+        elif filename.lower() in ("banner.png", "background.jpg"):
+            candidates = [f"assets/images/{filename}"]
+        elif filename.lower() == "icons8-one-ring-96.png":
+            candidates = ["assets/icons/icons8-one-ring-96.png"]
+        elif ext in (".cur", ".ani"):
+            candidates = [f"assets/cursors/{filename}"]
+        else:
+            candidates = [
+                f"assets/{relative_path}",
+                f"assets/images/{filename}",
+                f"assets/icons/{filename}",
+                f"assets/cursors/{filename}",
+                f"assets/fonts/{relative_path}",
+            ]
+
+        for rel in candidates:
+            p = os.path.join(base_dir, rel)
+            if os.path.exists(p):
+                return p
+
+        # 3) Last-resort: return the direct path for clearer error messages upstream
+        return direct
 
     def load_custom_font(self, font_path, size=16):
         """Load a custom font from file and return a font object."""
@@ -914,7 +1011,61 @@ class ModLauncher(tk.Tk):
         print(f"Warning: Could not set animated cursor from {ani_path}")
 
     def create_background(self):
-        return ui_layout.create_background(self)
+        """Creates a canvas with background image and fade effect."""
+        try:
+            # Create canvas for background
+            self.bg_canvas = tk.Canvas(
+                self, width=800, height=700, highlightthickness=0
+            )
+            self.bg_canvas.pack(fill="both", expand=True)
+            
+            # Set custom cursor for canvas
+            self.set_custom_cursor(self.bg_canvas)
+
+            # Load and resize background image
+            bg_image = Image.open(self.resource_path("background.jpg"))
+            bg_image = bg_image.resize((800, 700), Image.Resampling.LANCZOS)
+            
+            # Create fade overlay - darker at edges, lighter in center
+            from PIL import ImageDraw
+            fade_overlay = Image.new("RGBA", (800, 700), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(fade_overlay)
+            
+            # Create radial fade using ellipses for better performance
+            center_x, center_y = 400, 350
+            # Create multiple concentric ellipses for smooth gradient
+            max_radius = 300
+            for i in range(max_radius, 0, -2):
+                alpha = int((1 - i/max_radius) ** 1.5 * 120)
+                if alpha > 0:
+                    # Draw ellipse with decreasing opacity
+                    bbox = [
+                        center_x - i, center_y - int(i * 0.8),
+                        center_x + i, center_y + int(i * 0.8)
+                    ]
+                    # Use a semi-transparent black for the fade
+                    draw.ellipse(bbox, fill=(0, 0, 0, alpha))
+            
+            # Composite the fade overlay onto the background
+            bg_image = bg_image.convert("RGBA")
+            bg_image = Image.alpha_composite(bg_image, fade_overlay)
+            bg_image = bg_image.convert("RGB")
+            
+            self.bg_photo = ImageTk.PhotoImage(bg_image)
+
+            # Place background image on canvas
+            self.bg_canvas.create_image(0, 0, anchor="nw", image=self.bg_photo)
+
+            # Store reference to prevent garbage collection
+            self.bg_canvas.bg_image = self.bg_photo
+        except Exception as e:
+            print(f"Error loading background: {e}")
+            # Fallback: create a simple colored canvas
+            self.bg_canvas = tk.Canvas(
+                self, width=800, height=700, bg="#2b2b2b",
+                highlightthickness=0
+            )
+            self.bg_canvas.pack(fill="both", expand=True)
 
     def draw_separator_border(self, x, y, width, height, tag="separator"):
         """Draws a separator border around a frame at given position."""
@@ -1250,16 +1401,427 @@ class ModLauncher(tk.Tk):
         return []
 
     def create_banner(self):
-        return ui_layout.create_banner(self)
+        """Displays the banner at the top with separator."""
+        try:
+            image = Image.open(self.resource_path("banner.png"))
+            image = image.resize((800, 150), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(image)
+            banner = tk.Label(self.bg_canvas, image=photo, bg="#000000", bd=0)
+            banner.image = photo
+            banner_window = self.bg_canvas.create_window(400, 75, window=banner)
+            
+            # Add prominent separator bar below banner (drawn after to appear on top)
+            # Create a visible separator bar (10px tall with gradient effect)
+            separator_y = 150
+            # Bottom shadow for depth
+            self.bg_canvas.create_rectangle(
+                0, separator_y + 8, 800, separator_y + 10,
+                fill="#000000", outline="", tags="separator"
+            )
+            # Dark base
+            self.bg_canvas.create_rectangle(
+                0, separator_y + 5, 800, separator_y + 8,
+                fill="#0f0f0f", outline="", tags="separator"
+            )
+            # Main separator bar - darker and more visible
+            self.bg_canvas.create_rectangle(
+                0, separator_y + 2, 800, separator_y + 5,
+                fill="#1f1f1f", outline="", tags="separator"
+            )
+            # Middle accent
+            self.bg_canvas.create_rectangle(
+                0, separator_y + 1, 800, separator_y + 2,
+                fill="#3f3f3f", outline="", tags="separator"
+            )
+            # Top bright line for clear separation
+            self.bg_canvas.create_rectangle(
+                0, separator_y, 800, separator_y + 1,
+                fill="#5f5f5f", outline="", tags="separator"
+            )
+            # Top highlight line
+            self.bg_canvas.create_line(
+                0, separator_y - 1, 800, separator_y - 1,
+                fill="#7f7f7f", width=2, tags="separator"
+            )
+            
+            # Ensure separator is above banner window
+            self.bg_canvas.tag_raise("separator")
+        except Exception as e:
+            print(f"Error loading banner: {e}")
 
     def create_top_buttons(self):
-        return ui_layout.create_top_buttons(self)
+        """Creates top buttons for folder selection, uninstallation."""
+        # Place widgets directly on canvas to avoid frame backgrounds
+        top_y = 200  # Increased from 180 to add more space below banner
+        x_pos = 200  # Starting x position
+
+        # Folder button
+        self.folder_button = tk.Button(
+            self.bg_canvas, text="Select Install Folder",
+            command=self.select_folder
+        )
+        self.style_button(
+            self.folder_button, bg_color="#4a90e2", hover_color="#357abd"
+        )
+        self.set_custom_cursor(self.folder_button)
+        self.folder_button_window = self.bg_canvas.create_window(x_pos, top_y, window=self.folder_button)
+        self.after(10, lambda: self.add_button_shadow(self.folder_button_window))
+        x_pos += 150
+
+        # Create Shortcut button (moved to be left of Uninstall; color matches Folder button)
+        self.create_shortcut_button = tk.Button(
+            self.bg_canvas, text="Create Shortcut",
+            command=self.create_shortcut, state="disabled"
+        )
+        self.style_button(
+            self.create_shortcut_button, bg_color="#4a90e2", hover_color="#357abd"
+        )
+        self.set_custom_cursor(self.create_shortcut_button)
+        self.create_shortcut_button_window = self.bg_canvas.create_window(x_pos, top_y, window=self.create_shortcut_button)
+        self.after(10, lambda: self.add_button_shadow(self.create_shortcut_button_window))
+        x_pos += 150
+
+        # Uninstall button (moved to the right position)
+        self.uninstall_button = tk.Button(
+            self.bg_canvas, text="Uninstall Mod",
+            command=self.uninstall_mod, state="disabled"
+        )
+        self.style_button(
+            self.uninstall_button, bg_color="#e74c3c", hover_color="#c0392b"
+        )
+        self.set_custom_cursor(self.uninstall_button)
+        self.uninstall_button_window = self.bg_canvas.create_window(x_pos, top_y, window=self.uninstall_button)
+        self.after(10, lambda: self.add_button_shadow(self.uninstall_button_window))
+        # Hide buttons initially since they start disabled
+        self.hide_uninstall_button()
+        self.hide_create_shortcut_button()
+        # Update folder button position after hiding other buttons
+        self.after(50, self._update_folder_button_position)
+        x_pos += 150
+
+        # Language label - position above the dropdown
+        language_x, language_y = x_pos, top_y - 25
+        # Create shadow text first (behind main text)
+        language_shadow = self.bg_canvas.create_text(
+            language_x + 2, language_y + 2, text="Language:", fill="#000000",
+            font=("Segoe UI", 9, "bold"), anchor="center"
+        )
+        # Create main text on top
+        language_label = self.bg_canvas.create_text(
+            language_x, language_y, text="Language:", fill="white",
+            font=("Segoe UI", 9, "bold"), anchor="center"
+        )
+        # Ensure label is visible by raising it above other elements
+        self.bg_canvas.tag_raise(language_label)
+
+        # Language dropdown
+        self.language_dropdown = ttk.Combobox(
+            self.bg_canvas, textvariable=self.language,
+            state="readonly", width=15
+        )
+        self.language_dropdown["values"] = ["English", "Portuguese (BR)"]
+        self.language_dropdown.current(0)
+        self.bg_canvas.create_window(x_pos, top_y, window=self.language_dropdown)
+        self.language_dropdown.bind("<<ComboboxSelected>>", self.change_language)
 
     def create_news_section(self):
-        return ui_layout.create_news_section(self)
+        """Creates the news section in the middle."""
+        news_y = 350
+        news_width = 780
+        news_height = 200
+        self.news_frame = tk.Frame(
+            self.bg_canvas, borderwidth=0, relief="flat",
+            height=news_height, width=news_width, bg="#1a1a1a"
+        )
+        self.news_frame.pack_propagate(False)
+        self.set_custom_cursor(self.news_frame)
+        self.bg_canvas.create_window(400, news_y, window=self.news_frame)
+        
+        # Draw separator border around news section
+        self.draw_separator_border(400, news_y, news_width, news_height, "news_sep")
+
+        news_title = tk.Label(
+            self.news_frame, text="Latest News",
+            font=("Segoe UI", 12, "bold"), bg="#1a1a1a", fg="white"
+        )
+        news_title.pack(pady=5)
+        # Fetch and sanitize news HTML to prevent parsing errors
+        news_html = self.fetch_news()
+        # Wrap HTMLLabel in try-except to handle parsing errors gracefully
+        try:
+            self.news_label = HTMLLabel(self.news_frame, html=news_html)
+            self.news_label.pack(fill="both", expand=True, padx=5, pady=5)
+        except Exception as e:
+            # If HTML parsing fails, use a simple text label instead
+            print(f"HTML parsing error in news widget: {e}")
+            self.news_label = tk.Label(
+                self.news_frame,
+                text="Failed to load news. Please check your internet connection.",
+                font=("Segoe UI", 9),
+                bg="#ffffff",
+                fg="#000000",
+                wraplength=600,
+                justify="left"
+            )
+            self.news_label.pack(fill="both", expand=True, padx=5, pady=5)
 
     def create_bottom_section(self):
-        return ui_layout.create_bottom_section(self)
+        """Creates the bottom section for Download button."""
+        bottom_y = 550
+
+        # Bottom info - create frame with black background like news container
+        info_y = 680
+        info_width = 780
+        info_height = 30
+
+        # Play Button - place directly on canvas
+        # Load animated icon from .ani file
+        ani_path = self.resource_path("OneRing.ani")
+        self.play_button_frames = None
+        self.play_button_delays = None
+        self.play_button_icon = None
+        
+        if os.path.exists(ani_path):
+            try:
+                frames, delays = self.load_ani_frames(ani_path, target_size=(32, 32))
+                if frames:
+                    self.play_button_frames = frames
+                    self.play_button_delays = delays
+                    self.play_button_icon = frames[0]  # Start with first frame
+                else:
+                    # Fallback to static image if ANI loading fails
+                    try:
+                        icon_image = Image.open(self.resource_path("icons8-one-ring-96.png"))
+                        icon_image = icon_image.resize((32, 32), Image.Resampling.LANCZOS)
+                        self.play_button_icon = ImageTk.PhotoImage(icon_image)
+                    except:
+                        self.play_button_icon = None
+            except Exception as e:
+                print(f"Error loading animated icon: {e}")
+                # Fallback to static image
+                try:
+                    icon_image = Image.open(self.resource_path("icons8-one-ring-96.png"))
+                    icon_image = icon_image.resize((32, 32), Image.Resampling.LANCZOS)
+                    self.play_button_icon = ImageTk.PhotoImage(icon_image)
+                except:
+                    self.play_button_icon = None
+        else:
+            # Fallback to static image if .ani file doesn't exist
+            try:
+                icon_image = Image.open(self.resource_path("icons8-one-ring-96.png"))
+                icon_image = icon_image.resize((32, 32), Image.Resampling.LANCZOS)
+                self.play_button_icon = ImageTk.PhotoImage(icon_image)
+            except Exception as e:
+                print(f"Error loading play button icon: {e}")
+                self.play_button_icon = None
+        
+        self.play_button = tk.Button(
+            self.bg_canvas,
+            text="Play Realms in Exile",
+            image=self.play_button_icon if self.play_button_icon else None,
+            compound="left" if self.play_button_icon else None,
+            command=self.launch_game
+        )
+        # Store reference to prevent garbage collection
+        if self.play_button_icon:
+            self.play_button.image = self.play_button_icon
+        
+        # Start animation if frames are available
+        if self.play_button_frames:
+            self.animate_button_icon(self.play_button, self.play_button_frames, self.play_button_delays)
+        
+        self.style_button(
+            self.play_button, bg_color="#27ae60", hover_color="#229954"
+        )
+        # Load and apply ringbearer font to match Download button
+        self.play_button_font = self.load_custom_font("ringbearer/RINGM___.TTF", size=16)
+        # Store font reference to prevent garbage collection
+        # Set same styling as Download button for consistency
+        self.play_button.config(
+            font=self.play_button_font,  # Use ringbearer font
+            fg="white",  # Ensure text is white and visible
+            padx=30,  # Wider padding for larger footprint
+            pady=30,
+            anchor="center",
+            justify="center",
+            height=5  # Same height as Download button
+        )
+        # Set custom cursor on the button to prevent it from changing on hover
+        # Do this after all config to ensure it's not overridden
+        self.set_custom_cursor(self.play_button)
+        # Shadow will be added when button is shown
+
+        # Download Button - place directly on canvas
+        # Load animated icons from .ani files (repair for base download, attmagic for update, magnify for checking)
+        repair_ani_path = self.resource_path("SCCRepair.ani")
+        attmagic_ani_path = self.resource_path("SCCAttMagic.ani")
+        magnify_ani_path = self.resource_path("magnify.ani")
+        
+        # Load repair icon (for download/update)
+        self.download_button_frames = None
+        self.download_button_delays = None
+        self.download_button_icon = None
+        
+        if os.path.exists(repair_ani_path):
+            try:
+                frames, delays = self.load_ani_frames(repair_ani_path, target_size=(32, 32))
+                if frames:
+                    self.download_button_frames = frames
+                    self.download_button_delays = delays
+                    self.download_button_icon = frames[0]  # Start with first frame
+                else:
+                    self.download_button_icon = None
+            except Exception as e:
+                print(f"Error loading download button animated icon: {e}")
+                self.download_button_icon = None
+        else:
+            self.download_button_icon = None
+        
+        # Load attmagic icon (for update)
+        self.update_button_frames = None
+        self.update_button_delays = None
+        self.update_button_icon = None
+        
+        if os.path.exists(attmagic_ani_path):
+            try:
+                frames, delays = self.load_ani_frames(attmagic_ani_path, target_size=(32, 32))
+                if frames:
+                    self.update_button_frames = frames
+                    self.update_button_delays = delays
+                    self.update_button_icon = frames[0]
+                else:
+                    self.update_button_icon = None
+            except Exception as e:
+                print(f"Error loading update button animated icon: {e}")
+                self.update_button_icon = None
+        else:
+            self.update_button_icon = None
+        
+        # Load magnify icon (for checking/searching)
+        self.checking_button_frames = None
+        self.checking_button_delays = None
+        self.checking_button_icon = None
+        
+        if os.path.exists(magnify_ani_path):
+            try:
+                frames, delays = self.load_ani_frames(magnify_ani_path, target_size=(32, 32))
+                if frames:
+                    self.checking_button_frames = frames
+                    self.checking_button_delays = delays
+                    self.checking_button_icon = frames[0]  # Start with first frame
+                else:
+                    self.checking_button_icon = None
+            except Exception as e:
+                print(f"Error loading checking button animated icon: {e}")
+                self.checking_button_icon = None
+        else:
+            self.checking_button_icon = None
+        
+        # Use magnify icon for "Checking..." state initially
+        initial_icon = self.checking_button_icon if self.checking_button_icon else self.download_button_icon
+        
+        self.download_button = tk.Button(
+            self.bg_canvas,
+            text="Checking...",
+            state="disabled",
+            image=initial_icon if initial_icon else None,
+            compound="left" if initial_icon else None,
+            command=self.download_and_extract_mod
+        )
+        # Store reference to prevent garbage collection
+        if initial_icon:
+            self.download_button.image = initial_icon
+        
+        # Start animation with checking icon if available, otherwise use download icon
+        if self.checking_button_frames:
+            self.animate_button_icon(self.download_button, self.checking_button_frames, self.checking_button_delays)
+        elif self.download_button_frames:
+            self.animate_button_icon(self.download_button, self.download_button_frames, self.download_button_delays)
+        
+        self.style_button(
+            self.download_button,
+            bg_color="#27ae60", hover_color="#229954"
+        )
+        # Load and apply ringbearer font
+        self.download_button_font = self.load_custom_font("ringbearer/RINGM___.TTF", size=16)
+        # Store font reference to prevent garbage collection
+        # Set same size as Play button with more height and icon positioned further left
+        # Override padx after style_button to add margin around text while keeping icon close to left
+        # To offset text up, we'll use window position offset
+        # Use white text color for visibility
+        self.download_button.config(
+            font=self.download_button_font,  # Use ringbearer font
+            fg="white",  # Ensure text is white and visible
+            padx=30,  # Match Play button width visually
+            pady=30,  # Vertical padding
+            anchor="center",  # Keep text centered
+            justify="center",
+            height=5  # Increased height in text lines for taller button
+        )
+        self.set_custom_cursor(self.download_button)
+        # Offset button window position up to move text up (adjust the -5 value to tweak)
+        self.download_button_window = self.bg_canvas.create_window(
+            400, bottom_y - 5, window=self.download_button
+        )
+        self.after(10, lambda: self.add_button_shadow(self.download_button_window))
+
+        # Progress Bar - place directly on canvas
+        self.progress = ttk.Progressbar(
+            self.bg_canvas, orient="horizontal",
+            length=500, mode="determinate"
+        )
+        self.progress_window = self.bg_canvas.create_window(
+            400, bottom_y + 40, window=self.progress
+        )
+        self.bg_canvas.itemconfig(self.progress_window, state="hidden")
+
+        # Create frame with black background
+        self.info_frame = tk.Frame(
+            self.bg_canvas, borderwidth=0, relief="flat",
+            height=info_height, width=info_width, bg="#000000"
+        )
+        self.info_frame.pack_propagate(False)
+        self.set_custom_cursor(self.info_frame)
+        self.bg_canvas.create_window(400, info_y, window=self.info_frame)
+        
+        # Draw separator border around bottom info frame
+        self.draw_separator_border(400, info_y, info_width, info_height, "info_sep")
+
+        # Folder Label (left) - place in frame
+        self.folder_label = tk.Label(
+            self.info_frame,
+            text="Installation Folder: Not selected",
+            font=("Segoe UI", 9),
+            anchor="w",
+            fg="white",
+            bg="#000000"
+        )
+        self.folder_label.pack(side="left", padx=10, pady=5)
+
+        # Status Label (center) - centered relative to entire screen width (400px)
+        self.status_label = tk.Label(
+            self.info_frame,
+            text="Checking mod status...",
+            font=("Segoe UI", 9, "bold"),
+            anchor="center",
+            fg="#4a90e2",
+            bg="#000000"
+        )
+        # Place at screen center (400px from screen left)
+        # Frame is 780px wide, centered at 400px, so frame left is at 10px
+        # Screen center (400px) - frame left (10px) = 390px from frame left
+        self.status_label.place(x=390, rely=0.5, anchor="center")
+
+        # Launcher Version Label (right) - place in frame
+        self.version_label = tk.Label(
+            self.info_frame,
+            text=f"Launcher v{LAUNCHER_VERSION}",
+            font=("Segoe UI", 9),
+            anchor="e",
+            fg="white",
+            bg="#000000"
+        )
+        self.version_label.pack(side="right", padx=10, pady=5)
 
     def fetch_news(self):
         """Fetches the news content."""
@@ -2147,23 +2709,82 @@ class ModLauncher(tk.Tk):
         parent_dir = os.path.dirname(install_path)
         zip_path = os.path.join(parent_dir, f"{version_label.replace(' ', '_')}.zip")
 
+        # Download the ZIP file
+        response = requests.get(download_url, stream=True)
+        total_size = int(response.headers.get("content-length", 0))
+        downloaded_size = 0
+
+        with open(zip_path, "wb") as file:
+            for chunk in response.iter_content(chunk_size=1024):
+                if chunk:
+                    file.write(chunk)
+                    downloaded_size += len(chunk)
+                    self.progress["value"] = (downloaded_size / total_size) * 100 if total_size else 0
+                    self.update()
+
+        # Update status during installation
         self.status_label.config(text=f"Installing {version_label}...", fg="blue")
         self.update()
 
+        # Extract the ZIP file to a temporary location to handle nested structure
         temp_dir = os.path.join(parent_dir, "temp_extraction")
+        if os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        os.makedirs(temp_dir)
 
-        def _on_progress(received: int, total: int):
-            self.progress["value"] = (received / total) * 100 if total else 0
-            self.update()
+        try:
+            # Extract the ZIP file to temporary location
+            with ZipFile(zip_path, "r") as zip_ref:
+                zip_ref.extractall(temp_dir)
 
-        install_service.download_and_install_zip(
-            dest_dir=install_path,
-            download_url=download_url,
-            zip_path=zip_path,
-            temp_extract_dir=temp_dir,
-            prefer_folder="realms",
-            on_progress=_on_progress,
-        )
+            # Find the realms folder in the extracted structure
+            realms_folder_found = None
+            for root, dirs, files in os.walk(temp_dir):
+                if "realms" in dirs:
+                    realms_folder_found = os.path.join(root, "realms")
+                    break
+
+            if realms_folder_found:
+                # Ensure the target directory exists
+                if not os.path.exists(install_path):
+                    os.makedirs(install_path)
+
+                # Extract each file from the found realms folder to the target location
+                self.status_label.config(text="Installing realms folder...", fg="blue")
+                self.update()
+
+                for root, dirs, files in os.walk(realms_folder_found):
+                    # Calculate the relative path from the realms folder
+                    rel_path = os.path.relpath(root, realms_folder_found)
+                    target_dir = os.path.join(install_path, rel_path)
+
+                    # Create target directory if it doesn't exist
+                    if not os.path.exists(target_dir):
+                        os.makedirs(target_dir)
+
+                    # Copy files to target location (overwrite existing files)
+                    for file in files:
+                        src_file = os.path.join(root, file)
+                        dst_file = os.path.join(target_dir, file)
+                        shutil.copy2(src_file, dst_file)
+
+            else:
+                # Fallback: extract directly to parent directory (old behavior)
+                self.status_label.config(text="Using fallback extraction method...", fg="blue")
+                self.update()
+                with ZipFile(zip_path, "r") as zip_ref:
+                    zip_ref.extractall(parent_dir)
+
+        finally:
+            # Clean up temporary directory
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+
+        # Remove the downloaded ZIP file
+        try:
+            os.remove(zip_path)
+        except Exception:
+            pass
 
         # Delete specific map folders after installation
         self.delete_specific_folders(install_path)
@@ -2172,34 +2793,97 @@ class ModLauncher(tk.Tk):
         self.update()
 
     def is_lower_version(self, version1, version2):
-        """Back-compat wrapper (migrated to services)."""
-        return svc_is_lower_version(str(version1), str(version2))
+        """Compares two version strings and returns True if version1 is lower than version2."""
+        try:
+            v1_parts = list(map(int, version1.split(".")))
+            v2_parts = list(map(int, version2.split(".")))
+
+            # Pad with zeros if needed
+            while len(v1_parts) < len(v2_parts):
+                v1_parts.append(0)
+            while len(v2_parts) < len(v1_parts):
+                v2_parts.append(0)
+
+            # Compare version parts
+            for i in range(len(v1_parts)):
+                if v1_parts[i] < v2_parts[i]:
+                    return True
+                elif v1_parts[i] > v2_parts[i]:
+                    return False
+
+            # If we get here, versions are equal
+            return False
+        except ValueError:
+            # If we can't parse the versions, assume we need an update
+            return True
 
     def get_remote_version(self):
         """Fetches the remote mod version."""
         try:
-            info = fetch_remote_version_info()
-            return info.version
+            response = requests.get(MOD_INFO_URL)
+            if response.status_code == 200:
+                return response.json().get("version", "0.0.0")
         except Exception as e:
             print(f"Error fetching remote version: {e}")
         return "0.0.0"
 
     def get_aotr_version_from_str_file(self, install_path):
-        """Back-compat wrapper (migrated to services)."""
+        """Parses AOTR version from the lotr.str file with robust matching."""
         try:
-            preferred_language = (self.language.get() or "")
-        except Exception:
-            preferred_language = ""
-        return get_aotr_version_from_lotr_str(install_path, preferred_language=preferred_language)
+            # Only read from aotr/data/lotr.str (no fallback)
+            file_path = os.path.join(install_path, "aotr", "data", "lotr.str")
+            if not os.path.exists(file_path):
+                print(f"AOTR data file not found: {file_path}")
+                return "0.0.0"
+
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
+                lines = file.readlines()
+
+                # Version patterns:
+                # - Allow quotes optional
+                # - Case-insensitive for the phrase
+                # - Capture versions like X, X.Y, X.Y.Z (any parts length, realistically 2-3)
+                # - Allow extra text after the version inside quotes (e.g., PT-BR translation note)
+                generic_pattern = r'["\']?Age of the Ring Version\s+(\d+(?:\.\d+)*)\b[^"\']*["\']?'
+                # PT-BR specific formatting requested:
+                ptbr_suffix_pattern = r'["\']?Age of the Ring Version\s+(\d+(?:\.\d+)*)\b\s*-\s*Tradu(?:ç|c)[aã]o\s+por\s+Hans\s+Oliveira\s+\(Annatar_BR\)[^"\']*["\']?'
+
+                # If user selected Portuguese in launcher, try PT-BR specific first
+                selected_lang = ""
+                try:
+                    selected_lang = (self.language.get() or "").lower()
+                except Exception:
+                    pass
+                patterns = [ptbr_suffix_pattern, generic_pattern] if "portuguese" in selected_lang else [generic_pattern]
+
+                for line in lines:
+                    # Skip commented lines (allow leading whitespace)
+                    if re.match(r'^\s*//', line):
+                        continue
+                    for pat in patterns:
+                        match = re.search(pat, line, flags=re.IGNORECASE)
+                        if match:
+                            version = match.group(1)
+                            print(f"Found AOTR version in lotr.str ({os.path.basename(file_path)}): {version}")
+                            return version
+
+                print("Could not find active AOTR version in lotr.str file")
+                return "0.0.0"
+
+        except Exception as e:
+            print(f"Error parsing AOTR version from lotr.str: {e}")
+            return "0.0.0"
 
     def get_aotr_version_info(self):
         """Fetches AOTR version information from the remote version file."""
         try:
-            info = fetch_remote_version_info()
-            return {
-                "required_aotr_version": info.required_aotr_version,
-                "current_aotr_version": "0.0.0",
-            }
+            response = requests.get(MOD_INFO_URL)
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    "required_aotr_version": data.get("required_aotr_version", "0.0.0"),
+                    "current_aotr_version": data.get("current_aotr_version", "0.0.0")
+                }
         except Exception as e:
             print(f"Error fetching AOTR version info: {e}")
         return {"required_aotr_version": "0.0.0", "current_aotr_version": "0.0.0"}
@@ -2491,16 +3175,33 @@ class ModLauncher(tk.Tk):
     def check_launcher_update(self):
         """Check if the launcher is up-to-date and prompt for update if necessary."""
         try:
-            info = fetch_remote_version_info()
-            latest_launcher_version = info.launcher_version
+            # Fetch the version.json file from the MOD_INFO_URL
+            print(f"Fetching version.json from: {MOD_INFO_URL}")
+            response = requests.get(MOD_INFO_URL)
+            print(f"Response status code: {response.status_code}")
 
-            if is_latest_newer(LAUNCHER_VERSION, latest_launcher_version):
-                user_choice = messagebox.askyesno(
-                    "Launcher Update Available",
-                    f"A new launcher version ({latest_launcher_version}) is available. Download and apply now?",
-                )
-                if user_choice:
-                    self.update_launcher()
+            if response.status_code == 200:
+                version_data = response.json()
+                print(f"Response content: {version_data}")  # Log the parsed JSON
+
+                # Extract launcher version from JSON
+                latest_launcher_version = version_data.get("launcher_version", "0.0.0")
+                print(f"Latest launcher version: {latest_launcher_version}")
+                print(f"Current launcher version: {LAUNCHER_VERSION}")
+
+                # Compare current launcher version with the latest
+                if self.is_newer_version(LAUNCHER_VERSION, latest_launcher_version):
+                    print("New launcher version detected!")
+                    user_choice = messagebox.askyesno(
+                        "Launcher Update Available",
+                        f"A new launcher version ({latest_launcher_version}) is available. Download and apply now?"
+                    )
+                    if user_choice:
+                        self.update_launcher()
+                else:
+                    print(f"Launcher is up-to-date ({LAUNCHER_VERSION}).")
+            else:
+                messagebox.showerror("Update Check Failed", "Failed to fetch version.json.")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to check for launcher updates: {e}")
 
@@ -2522,26 +3223,83 @@ class ModLauncher(tk.Tk):
             self.status_label.config(text="Preparing launcher update...", fg="blue")
             self.update()
 
-            def _on_status(msg: str):
-                self.status_label.config(text=msg, fg="blue")
-                self.update()
+            # 1) Stage the ZIP
+            staged_dir = self._download_and_stage_zip(LAUNCHER_ZIP_URL)
 
-            def _on_progress(pct: float):
-                self.bg_canvas.itemconfig(self.progress_window, state="normal")
-                self.progress["value"] = pct
-                self.update()
+            # 2) Write updater script
+            temp_root = os.path.dirname(os.path.dirname(staged_dir))  # parent of 'staged'
+            ps1_path = os.path.join(temp_root, "do_update.ps1")
+            _write_updater_ps1(ps1_path)
+            cmd_path = os.path.join(temp_root, "do_update.cmd")
+            _write_updater_cmd(cmd_path)
 
-            staged_dir = launcher_update_service.download_and_stage_zip(
-                LAUNCHER_ZIP_URL,
-                on_status=_on_status,
-                on_progress_pct=_on_progress,
-            )
+            # Path for target
+            target_dir = _launcher_dir()
 
-            launcher_update_service.spawn_updater_and_quit(
-                staged_dir=staged_dir,
-                quit_callback=lambda: self.after(300, self._quit_for_update),
-                on_status=_on_status,
-            )
+            # ALWAYS write logs to %TEMP% (writable even without elevation)
+            log_path = os.path.join(tempfile.gettempdir(), "realms_launcher_update.log")
+
+            # Pre-create & stamp the log so we know Python got this far
+            try:
+                with open(log_path, "a", encoding="utf-8") as lf:
+                    lf.write(f"[python] starting update at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            except Exception as e:
+                messagebox.showerror("Logging", f"Couldn't open log file:\n{log_path}\n{e}")
+
+            if _is_frozen():
+                relaunch_path = _launcher_path()     # the updated .exe
+                relaunch_args = ""                   # none
+            else:
+                # Relaunch the same script with the same interpreter
+                relaunch_path = sys.executable
+                relaunch_args = f'"{os.path.abspath(sys.argv[0])}"'
+
+            relaunch_cwd = target_dir  # important for relative assets
+
+            # 3) Build CMD argument list (more reliable on systems with script policy)
+            cmd_args = [
+                "/c",
+                cmd_path,
+                target_dir,
+                staged_dir,
+                str(os.getpid()),
+                relaunch_path,
+                relaunch_args,
+                relaunch_cwd,
+                log_path,
+            ]
+
+            # 4) Launch updater (optionally elevated)
+            use_elevated = USE_ELEVATED_UPDATER or (not _can_write_to_dir(target_dir))
+            if use_elevated:
+                # Inform user a UAC prompt may appear
+                try:
+                    self.status_label.config(text="Requesting Windows permission to update...", fg="blue")
+                    self.update()
+                except Exception:
+                    pass
+                # When elevating with ShellExecute, we must pass a single string of args
+                def _join_cmd_args(args):
+                    out = []
+                    for a in args:
+                        if a is None:
+                            continue
+                        # Always quote because we're invoking cmd.exe
+                        a = '"' + a.replace('"', '""') + '"'
+                        out.append(a)
+                    return " ".join(out)
+
+                arg_string = _join_cmd_args(cmd_args)
+                ctypes.windll.shell32.ShellExecuteW(
+                    None, "runas", "cmd.exe", arg_string, None, 1
+                )
+            else:
+                _start_detached(["cmd.exe"] + cmd_args)
+
+            # 5) Inform and quit so the updater can replace files
+            self.status_label.config(text="Applying update... The launcher will close and reopen.", fg="blue")
+            self.update()
+            self.after(300, self._quit_for_update)
 
         except Exception as e:
             messagebox.showerror("Update Failed", f"Failed to update the launcher: {e}")
@@ -2550,7 +3308,16 @@ class ModLauncher(tk.Tk):
 
     def is_newer_version(self, current_version, latest_version):
         """Return True if latest_version > current_version (numeric compare)."""
-        return is_latest_newer(str(current_version), str(latest_version))
+        try:
+            current_parts = list(map(int, current_version.split(".")))
+            latest_parts = list(map(int, latest_version.split(".")))
+            # Pad arrays to equal length
+            L = max(len(current_parts), len(latest_parts))
+            current_parts += [0] * (L - len(current_parts))
+            latest_parts += [0] * (L - len(latest_parts))
+            return latest_parts > current_parts
+        except ValueError:
+            return False
         
     def enter_update_mode(self):
         self.is_updating = True

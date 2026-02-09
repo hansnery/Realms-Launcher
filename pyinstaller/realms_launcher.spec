@@ -2,10 +2,10 @@
 
 
 a = Analysis(
-    ['realms_launcher.py'],
-    pathex=[],
+    ['src/realms_launcher/__main__.py'],
+    pathex=['src'],
     binaries=[('C:\\Windows\\System32\\vcruntime140.dll', '.'), ('C:\\Windows\\System32\\vcruntime140_1.dll', '.'), ('C:\\Windows\\System32\\msvcp140.dll', '.')],
-    datas=[('aotr_fs.ico', '.'), ('banner.png', '.'), ('background.jpg', '.'), ('icons8-one-ring-96.png', '.'), ('SCCpointer.cur', '.'), ('SCCRepair.ani', '.'), ('SCCAttMagic.ani', '.'), ('magnify.ani', '.'), ('OneRing.ani', '.'), ('ringbearer', 'ringbearer')],
+    datas=[('assets', 'assets')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['aotr_fs.ico'],
+    icon=['assets/icons/aotr_fs.ico'],
 )

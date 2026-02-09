@@ -1,34 +1,21 @@
+# Building the launcher (Windows)
+
+## Setup
+
+```powershell
 py -3.12 -m venv .venv312
-.venv312\Scripts\activate
-python -V
+.venv312\\Scripts\\activate
 python -m pip install --upgrade pip
-python -m pip install pyinstaller==6.6 pillow tkhtmlview requests rarfile pywin32
+python -m pip install -r requirements.txt -r requirements-dev.txt
+```
 
-Remove-Item -Recurse -Force .\build, .\dist -ErrorAction SilentlyContinue
-python -m PyInstaller --clean --noconfirm realms_launcher.spec
+## Build with the spec (recommended)
 
-OR:
+```powershell
+Remove-Item -Recurse -Force .\\build, .\\dist -ErrorAction SilentlyContinue
+python -m PyInstaller --clean --noconfirm pyinstaller\\realms_launcher.spec
+```
 
-py -3.12 -m venv .venv312
-.venv312\Scripts\activate
-python -V
-python -m pip install --upgrade pip
-python -m pip install pyinstaller==6.6 pillow tkhtmlview requests rarfile pywin32
-
-Remove-Item -Recurse -Force .\build, .\dist -ErrorAction SilentlyContinue
-python -m PyInstaller --clean --noconfirm --onefile --noconsole --noupx `
-  --icon aotr_fs.ico `
-  --add-data "aotr_fs.ico;." `
-  --add-data "banner.png;." `
-  --add-data "background.jpg;." `
-  --add-data "icons8-one-ring-96.png;." `
-  --add-data "SCCpointer.cur;." `
-  --add-data "SCCRepair.ani;." `
-  --add-data "SCCAttMagic.ani;." `
-  --add-data "magnify.ani;." `
-  --add-data "OneRing.ani;." `
-  --add-data "ringbearer;ringbearer" `
-  --add-binary "C:\Windows\System32\vcruntime140.dll;." `
-  --add-binary "C:\Windows\System32\vcruntime140_1.dll;." `
-  --add-binary "C:\Windows\System32\msvcp140.dll;." `
-  realms_launcher.py
+Notes:
+- Assets are bundled from the repo `assets/` folder.
+- The entrypoint is `src/realms_launcher/__main__.py` (spec sets `pathex=['src']`).
