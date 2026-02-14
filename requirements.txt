@@ -1,6 +1,5 @@
 requests
 Pillow
 tkhtmlview
-rarfile
 winshell
 pywin32

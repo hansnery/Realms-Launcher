@@ -852,9 +852,132 @@
   ('random',
    'C:\\Users\\Hans\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\random.py',
    'PYMODULE'),
-  ('rarfile',
+  ('realms_launcher',
    'C:\\Projetos\\Modding BFME2\\Realms '
-   'Launcher\\.venv312\\Lib\\site-packages\\rarfile.py',
+   'Launcher\\src\\realms_launcher\\__init__.py',
+   'PYMODULE'),
+  ('realms_launcher.app',
+   'C:\\Projetos\\Modding BFME2\\Realms Launcher\\src\\realms_launcher\\app.py',
+   'PYMODULE'),
+  ('realms_launcher.constants',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\constants.py',
+   'PYMODULE'),
+  ('realms_launcher.services',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\services\\__init__.py',
+   'PYMODULE'),
+  ('realms_launcher.services.admin_service',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\services\\admin_service.py',
+   'PYMODULE'),
+  ('realms_launcher.services.game_service',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\services\\game_service.py',
+   'PYMODULE'),
+  ('realms_launcher.services.install_service',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\services\\install_service.py',
+   'PYMODULE'),
+  ('realms_launcher.services.launcher_update_service',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\services\\launcher_update_service.py',
+   'PYMODULE'),
+  ('realms_launcher.services.news_service',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\services\\news_service.py',
+   'PYMODULE'),
+  ('realms_launcher.services.realms_install_service',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\services\\realms_install_service.py',
+   'PYMODULE'),
+  ('realms_launcher.services.realms_service',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\services\\realms_service.py',
+   'PYMODULE'),
+  ('realms_launcher.services.settings_service',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\services\\settings_service.py',
+   'PYMODULE'),
+  ('realms_launcher.services.updater_scripts',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\services\\updater_scripts.py',
+   'PYMODULE'),
+  ('realms_launcher.services.version_service',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\services\\version_service.py',
+   'PYMODULE'),
+  ('realms_launcher.ui',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\ui\\__init__.py',
+   'PYMODULE'),
+  ('realms_launcher.ui.ani',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\ui\\ani.py',
+   'PYMODULE'),
+  ('realms_launcher.ui.assets',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\ui\\assets.py',
+   'PYMODULE'),
+  ('realms_launcher.ui.cursors',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\ui\\cursors.py',
+   'PYMODULE'),
+  ('realms_launcher.ui.effects',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\ui\\effects.py',
+   'PYMODULE'),
+  ('realms_launcher.ui.layout',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\ui\\layout.py',
+   'PYMODULE'),
+  ('realms_launcher.ui.mixins',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\ui\\mixins\\__init__.py',
+   'PYMODULE'),
+  ('realms_launcher.ui.mixins.actions_mixin',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\ui\\mixins\\actions_mixin.py',
+   'PYMODULE'),
+  ('realms_launcher.ui.mixins.admin_mixin',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\ui\\mixins\\admin_mixin.py',
+   'PYMODULE'),
+  ('realms_launcher.ui.mixins.button_visibility_mixin',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\ui\\mixins\\button_visibility_mixin.py',
+   'PYMODULE'),
+  ('realms_launcher.ui.mixins.launcher_update_mixin',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\ui\\mixins\\launcher_update_mixin.py',
+   'PYMODULE'),
+  ('realms_launcher.ui.mixins.state_mixin',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\ui\\mixins\\state_mixin.py',
+   'PYMODULE'),
+  ('realms_launcher.ui.mixins.ui_helpers_mixin',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\ui\\mixins\\ui_helpers_mixin.py',
+   'PYMODULE'),
+  ('realms_launcher.ui.mod_launcher',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\ui\\mod_launcher.py',
+   'PYMODULE'),
+  ('realms_launcher.ui.window',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\ui\\window.py',
+   'PYMODULE'),
+  ('realms_launcher.util',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\util\\__init__.py',
+   'PYMODULE'),
+  ('realms_launcher.util.logging',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\util\\logging.py',
+   'PYMODULE'),
+  ('realms_launcher.util.runtime',
+   'C:\\Projetos\\Modding BFME2\\Realms '
+   'Launcher\\src\\realms_launcher\\util\\runtime.py',
    'PYMODULE'),
   ('requests',
    'C:\\Projetos\\Modding BFME2\\Realms '
@@ -1185,10 +1308,6 @@
    'PYMODULE'),
   ('webbrowser',
    'C:\\Users\\Hans\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\webbrowser.py',
-   'PYMODULE'),
-  ('win32con',
-   'C:\\Projetos\\Modding BFME2\\Realms '
-   'Launcher\\.venv312\\Lib\\site-packages\\win32\\lib\\win32con.py',
    'PYMODULE'),
   ('xml',
    'C:\\Users\\Hans\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\xml\\__init__.py',

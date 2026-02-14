@@ -88,7 +88,6 @@ class ButtonVisibilityMixin:
             return
 
         uninstall_visible = False
-        shortcut_visible = False
 
         if hasattr(self, "uninstall_button_window"):
             try:
@@ -97,14 +96,7 @@ class ButtonVisibilityMixin:
             except Exception:
                 pass
 
-        if hasattr(self, "create_shortcut_button_window"):
-            try:
-                state = self.bg_canvas.itemcget(self.create_shortcut_button_window, "state")  # type: ignore[attr-defined]
-                shortcut_visible = state == "normal"
-            except Exception:
-                pass
-
-        new_x = 400 if (not uninstall_visible and not shortcut_visible) else 100
+        new_x = 400 if not uninstall_visible else 100
 
         try:
             coords = self.bg_canvas.coords(self.folder_button_window)  # type: ignore[attr-defined]
@@ -124,13 +116,4 @@ class ButtonVisibilityMixin:
             self.bg_canvas.itemconfig(self.uninstall_button_window, state="hidden")  # type: ignore[attr-defined]
             self._update_folder_button_position()
 
-    def show_create_shortcut_button(self) -> None:
-        if hasattr(self, "create_shortcut_button_window"):
-            self.bg_canvas.itemconfig(self.create_shortcut_button_window, state="normal")  # type: ignore[attr-defined]
-            self._update_folder_button_position()
-
-    def hide_create_shortcut_button(self) -> None:
-        if hasattr(self, "create_shortcut_button_window"):
-            self.bg_canvas.itemconfig(self.create_shortcut_button_window, state="hidden")  # type: ignore[attr-defined]
-            self._update_folder_button_position()
 

@@ -87,15 +87,6 @@ def create_top_buttons(self) -> None:
     self.after(10, lambda: self.add_button_shadow(self.folder_button_window))
     x_pos += 150
 
-    self.create_shortcut_button = tk.Button(
-        self.bg_canvas, text="Create Shortcut", command=self.create_shortcut, state="disabled"
-    )
-    self.style_button(self.create_shortcut_button, bg_color="#4a90e2", hover_color="#357abd")
-    self.set_custom_cursor(self.create_shortcut_button)
-    self.create_shortcut_button_window = self.bg_canvas.create_window(x_pos, top_y, window=self.create_shortcut_button)
-    self.after(10, lambda: self.add_button_shadow(self.create_shortcut_button_window))
-    x_pos += 150
-
     self.uninstall_button = tk.Button(
         self.bg_canvas, text="Uninstall Mod", command=self.uninstall_mod, state="disabled"
     )
@@ -105,7 +96,6 @@ def create_top_buttons(self) -> None:
     self.after(10, lambda: self.add_button_shadow(self.uninstall_button_window))
 
     self.hide_uninstall_button()
-    self.hide_create_shortcut_button()
     self.after(50, self._update_folder_button_position)
     x_pos += 150
 

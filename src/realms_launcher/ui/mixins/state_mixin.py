@@ -56,9 +56,7 @@ class StateMixin:
         self.hide_download_button()
         self.hide_play_button()
         self.uninstall_button.config(state="disabled")  # type: ignore[attr-defined]
-        self.create_shortcut_button.config(state="disabled")  # type: ignore[attr-defined]
         self.hide_uninstall_button()
-        self.hide_create_shortcut_button()
         self.language_dropdown.config(state="disabled")  # type: ignore[attr-defined]
 
     def select_folder(self) -> None:
@@ -132,8 +130,6 @@ class StateMixin:
             self.hide_play_button()
             self.uninstall_button.config(state="disabled")  # type: ignore[attr-defined]
             self.hide_uninstall_button()
-            self.create_shortcut_button.config(state="disabled")  # type: ignore[attr-defined]
-            self.hide_create_shortcut_button()
             self.show_folder_button()
             self.language_dropdown.config(state="disabled")  # type: ignore[attr-defined]
         elif status.state == "update_available":
@@ -147,8 +143,6 @@ class StateMixin:
             self.hide_play_button()
             self.uninstall_button.config(state="normal")  # type: ignore[attr-defined]
             self.show_uninstall_button()
-            self.create_shortcut_button.config(state="normal")  # type: ignore[attr-defined]
-            self.show_create_shortcut_button()
             self.hide_folder_button()
             self.language_dropdown.config(state="readonly")  # type: ignore[attr-defined]
         else:
@@ -160,8 +154,6 @@ class StateMixin:
             self.show_play_button()
             self.uninstall_button.config(state="normal")  # type: ignore[attr-defined]
             self.show_uninstall_button()
-            self.create_shortcut_button.config(state="normal")  # type: ignore[attr-defined]
-            self.show_create_shortcut_button()
             self.hide_folder_button()
             self.language_dropdown.config(state="readonly")  # type: ignore[attr-defined]
 
@@ -173,8 +165,6 @@ class StateMixin:
         self.hide_play_button()
         self.uninstall_button.config(state="disabled")  # type: ignore[attr-defined]
         self.hide_uninstall_button()
-        self.create_shortcut_button.config(state="disabled")  # type: ignore[attr-defined]
-        self.hide_create_shortcut_button()
         self.language_dropdown.config(state="disabled")  # type: ignore[attr-defined]
         self.is_installed = False  # type: ignore[attr-defined]
 

@@ -5,7 +5,7 @@ import re
 import shutil
 from tkinter import messagebox
 
-from ...services import game_service, shortcut_service, settings_service
+from ...services import game_service, settings_service
 
 
 class ActionsMixin:
@@ -83,8 +83,6 @@ class ActionsMixin:
 
             self.uninstall_button.config(state="normal")  # type: ignore[attr-defined]
             self.show_uninstall_button()
-            self.create_shortcut_button.config(state="normal")  # type: ignore[attr-defined]
-            self.show_create_shortcut_button()
             self.bg_canvas.itemconfig(self.progress_window, state="hidden")  # type: ignore[attr-defined]
             self.save_folder(install_path, installed=True)
 
@@ -146,21 +144,9 @@ class ActionsMixin:
             self.hide_play_button()
             self.uninstall_button.config(state="disabled")  # type: ignore[attr-defined]
             self.hide_uninstall_button()
-            self.create_shortcut_button.config(state="disabled")  # type: ignore[attr-defined]
-            self.hide_create_shortcut_button()
             self.show_folder_button()
             self.language_dropdown.config(state="disabled")  # type: ignore[attr-defined]
         except Exception as e:
             self.status_label.config(text=f"Error uninstalling mod: {e}", fg="red")  # type: ignore[attr-defined]
 
-    def create_shortcut(self) -> None:
-        try:
-            install_path = self.install_folder.get()  # type: ignore[attr-defined]
-            shortcut_path = shortcut_service.create_shortcut_for_install(install_path)
-            messagebox.showinfo(
-                "Shortcut Created",
-                f"Shortcut created on the desktop: {shortcut_path}",
-            )
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to create shortcut: {e}")
 

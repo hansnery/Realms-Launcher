@@ -13,7 +13,9 @@ NEWS_URL = "https://raw.githubusercontent.com/hansnery/Realms-Launcher/main/dev/
 BASE_MOD_VERSION = "0.8.0"
 BASE_MOD_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms.zip"
 UPDATE_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_update.zip"
-AOTR_RAR_URL = "https://f005.backblazeb2.com/file/RealmsInExile/aotr.rar"
+FULL_MOD_ZIP_URL = (
+    "https://f005.backblazeb2.com/file/RealmsInExile/realms_full.zip"
+)
 
 # Launcher self-update
 LAUNCHER_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_launcher.zip"  # beta: realms_launcher_beta.zip

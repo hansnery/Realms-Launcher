@@ -12,6 +12,7 @@ class RemoteVersionInfo:
     version: str = "0.0.0"
     launcher_version: str = "0.0.0"
     required_aotr_version: str = "0.0.0"
+    current_aotr_version: str = "0.0.0"
 
 
 def fetch_remote_version_info(
@@ -26,6 +27,7 @@ def fetch_remote_version_info(
         version=str(data.get("version", "0.0.0")),
         launcher_version=str(data.get("launcher_version", "0.0.0")),
         required_aotr_version=str(data.get("required_aotr_version", "0.0.0")),
+        current_aotr_version=str(data.get("current_aotr_version", "0.0.0")),
     )
 
 

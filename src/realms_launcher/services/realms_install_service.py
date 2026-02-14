@@ -8,17 +8,13 @@ import os
 import shutil
 from collections.abc import Callable
 
-import rarfile
-import requests
-
 from ..constants import (
-    AOTR_RAR_URL,
     BASE_MOD_VERSION,
     BASE_MOD_ZIP_URL,
+    FULL_MOD_ZIP_URL,
     UPDATE_ZIP_URL,
 )
 from . import install_service
-from .aotr_service import get_aotr_version_from_lotr_str
 from .version_service import fetch_remote_version_info, is_lower_version
 
 
@@ -201,9 +197,11 @@ def download_and_install_package(
     on_status: StatusCallback | None = None,
     on_progress_pct: ProgressCallback | None = None,
 ) -> None:
-    """Download and install a specific package (realms base/update)."""
+    """Download and install a specific package (realms base/update/full)."""
     if version_label == "base mod":
         _status(on_status, f"Downloading Realms in Exile version {version_number}...", "blue")
+    elif version_label == "full version":
+        _status(on_status, f"Downloading Realms in Exile full version {version_number}...", "blue")
     else:
         _status(on_status, f"Downloading {version_label} version {version_number}...", "blue")
 
@@ -230,146 +228,28 @@ def download_and_install_package(
     _status(on_status, f"{version_label.capitalize()} version {version_number} installed successfully", "green")
 
 
-def get_aotr_version_info() -> dict[str, str]:
-    """Fetch AOTR required version from remote metadata."""
+def _read_local_version_info(version_file: str) -> tuple[str | None, str | None]:
+    """Read local version and aotr_version from realms_version.json.
+
+    Returns (version, aotr_version) — either may be None if missing.
+    """
     try:
-        info = fetch_remote_version_info()
-        return {
-            "required_aotr_version": info.required_aotr_version,
-            "current_aotr_version": "0.0.0",
-        }
+        with open(version_file, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+        if not content:
+            return None, None
+        data = json.loads(content) or {}
+        version = data.get("version")
+        aotr_version = data.get("aotr_version")
+        return (str(version) if version else None, str(aotr_version) if aotr_version else None)
     except Exception:
-        return {"required_aotr_version": "0.0.0", "current_aotr_version": "0.0.0"}
+        return None, None
 
 
-def get_aotr_version_from_str_file(install_path: str, *, preferred_language: str = "") -> str:
-    return get_aotr_version_from_lotr_str(install_path, preferred_language=preferred_language)
-
-
-def check_aotr_version(
-    install_path: str,
-    *,
-    preferred_language: str = "",
-    on_status: StatusCallback | None = None,
-    on_progress_pct: ProgressCallback | None = None,
-) -> tuple[bool, str | None]:
-    """Check if AOTR is compatible; download/extract if not. Returns (updated, rar_path)."""
-    try:
-        aotr_info = get_aotr_version_info()
-        required_version = aotr_info["required_aotr_version"]
-        current_version = get_aotr_version_from_str_file(install_path, preferred_language=preferred_language)
-
-        if is_lower_version(current_version, required_version):
-            existing_rar_path = os.path.join(install_path, "aotr.rar")
-            if os.path.exists(existing_rar_path):
-                _status(on_status, "Found existing AOTR RAR file. Extracting...", "blue")
-                return True, existing_rar_path
-
-            _status(
-                on_status,
-                f"Realms in Exile requires AOTR {required_version}. Current version: {current_version}. Downloading...",
-                "blue",
-            )
-            rar_path = download_and_install_aotr(
-                install_path,
-                required_version,
-                preferred_language=preferred_language,
-                on_status=on_status,
-                on_progress_pct=on_progress_pct,
-            )
-            return True, rar_path
-
-        return False, None
-    except Exception:
-        return False, None
-
-
-def download_and_install_aotr(
-    install_path: str,
-    aotr_version: str,
-    *,
-    preferred_language: str = "",
-    on_status: StatusCallback | None = None,
-    on_progress_pct: ProgressCallback | None = None,
-) -> str | None:
-    """Download AOTR RAR, extract into realms folder, return rar path (or None if deleted)."""
-    # Create a temporary file name
-    rar_path = os.path.join(install_path, "aotr.rar")
-
-    r = requests.get(AOTR_RAR_URL, stream=True)
-    total_size = int(r.headers.get("content-length", 0))
-    downloaded_size = 0
-
-    with open(rar_path, "wb") as file:
-        for chunk in r.iter_content(chunk_size=1024):
-            if not chunk:
-                continue
-            file.write(chunk)
-            downloaded_size += len(chunk)
-            if total_size > 0:
-                _progress(on_progress_pct, (downloaded_size / total_size) * 100.0)
-
-    _status(on_status, "Installing AOTR...", "blue")
-
-    realms_folder = os.path.join(install_path, "realms")
-    if os.path.exists(realms_folder):
-        _status(on_status, "Removing existing realms folder...", "blue")
-        shutil.rmtree(realms_folder)
-
-    try:
-        with rarfile.RarFile(rar_path, "r") as rar_ref:
-            rar_ref.extractall(install_path)
-
-            extracted_aotr = os.path.join(install_path, "aotr")
-            if os.path.exists(extracted_aotr):
-                os.rename(extracted_aotr, realms_folder)
-            else:
-                os.makedirs(realms_folder, exist_ok=True)
-                for item in os.listdir(install_path):
-                    item_path = os.path.join(install_path, item)
-                    if os.path.isfile(item_path) and item != "aotr.rar":
-                        shutil.move(item_path, os.path.join(realms_folder, item))
-                    elif os.path.isdir(item_path) and item != "realms":
-                        shutil.move(item_path, os.path.join(realms_folder, item))
-
-        _status(on_status, f"AOTR version {aotr_version} extracted successfully", "green")
-    except Exception as rar_error:
-        _status(on_status, "RAR extraction failed, checking AOTR version...", "orange")
-
-        # Helpful message (stdout only)
-        if "Cannot find working tool" in str(rar_error):
-            print("Note: To extract RAR files, install a RAR extraction tool like:")
-            print("  - WinRAR: https://www.win-rar.com/")
-            print("  - 7-Zip: https://7-zip.org/")
-            print("  - Or use the command line: choco install unrar")
-
-        aotr_info = get_aotr_version_info()
-        required_version = aotr_info["required_aotr_version"]
-        current_version = get_aotr_version_from_str_file(install_path, preferred_language=preferred_language)
-
-        if is_lower_version(current_version, required_version):
-            raise Exception(
-                f"RAR extraction failed. Current AOTR version ({current_version}) is lower than required ({required_version}). "
-                f"Please install a RAR extraction tool to proceed."
-            )
-
-        existing_aotr = os.path.join(install_path, "aotr")
-        if os.path.exists(existing_aotr):
-            shutil.copytree(existing_aotr, realms_folder)
-            _status(on_status, "Using existing AOTR folder as fallback", "green")
-        else:
-            raise Exception("RAR extraction failed and no existing AOTR folder found")
-
-        # Delete the downloaded RAR file since we couldn't use it
-        try:
-            if os.path.exists(rar_path):
-                os.remove(rar_path)
-        except Exception:
-            pass
-        return None
-
-    _status(on_status, f"AOTR version {aotr_version} installed successfully", "green")
-    return rar_path
+def _write_local_version_info(version_file: str, version: str, aotr_version: str) -> None:
+    """Write version and aotr_version to realms_version.json."""
+    with open(version_file, "w", encoding="utf-8") as f:
+        json.dump({"version": version, "aotr_version": aotr_version}, f)
 
 
 def install_or_update_realms(
@@ -379,119 +259,112 @@ def install_or_update_realms(
     on_status: StatusCallback | None = None,
     on_progress_pct: ProgressCallback | None = None,
 ) -> InstallResult:
-    """Main workflow: ensure AOTR compatibility, then install base/update realms."""
+    """Main workflow: check cloud AOTR versions, then install/update realms accordingly.
+
+    Decision logic (both AOTR version fields come from the cloud version.json):
+    - If required_aotr_version == current_aotr_version:
+        Lightweight path — copy aotr/ -> realms/, download base mod + update.
+    - If required_aotr_version != current_aotr_version:
+        Full version path — download a complete Realms package (includes AOTR files).
+
+    For existing installations, if the local aotr_version differs from the cloud's
+    required_aotr_version, treat as a fresh install (AOTR base has changed).
+    """
     try:
         install_path = os.path.normpath(install_path)
-        existing_rar_path = os.path.join(install_path, "aotr.rar")
+        realms_folder = os.path.join(install_path, "realms")
+        version_file = os.path.join(realms_folder, "realms_version.json")
 
-        aotr_updated, aotr_rar_path = check_aotr_version(
-            install_path,
-            preferred_language=preferred_language,
-            on_status=on_status,
-            on_progress_pct=on_progress_pct,
+        # 1. Fetch remote version info
+        _status(on_status, "Checking for updates...", "blue")
+        try:
+            remote_info = fetch_remote_version_info()
+            remote_version = remote_info.version
+            required_aotr = remote_info.required_aotr_version
+            current_aotr = remote_info.current_aotr_version
+        except Exception:
+            return InstallResult(success=False, error="Failed to fetch version info from server.")
+
+        # 2. Determine if AOTR versions are in sync (both from cloud)
+        aotr_versions_match = (required_aotr == current_aotr)
+
+        # 3. Read local version info
+        local_version, local_aotr_version = _read_local_version_info(version_file)
+
+        # 4. Determine install type
+        is_fresh_install = local_version is None
+        aotr_base_changed = (
+            not is_fresh_install
+            and local_aotr_version is not None
+            and local_aotr_version != required_aotr
         )
 
-        # If we found an existing RAR file, we need to extract it if realms folder missing
-        if aotr_updated and aotr_rar_path and os.path.exists(aotr_rar_path):
-            realms_folder = os.path.join(install_path, "realms")
-            if not os.path.exists(realms_folder) or not os.path.isdir(realms_folder):
-                _status(on_status, "Extracting existing AOTR RAR file...", "blue")
-                try:
-                    with rarfile.RarFile(aotr_rar_path, "r") as rar_ref:
-                        rar_ref.extractall(install_path)
-                        extracted_aotr = os.path.join(install_path, "aotr")
-                        if os.path.exists(extracted_aotr):
-                            os.rename(extracted_aotr, realms_folder)
-                        else:
-                            os.makedirs(realms_folder, exist_ok=True)
-                            for item in os.listdir(install_path):
-                                item_path = os.path.join(install_path, item)
-                                if os.path.isfile(item_path) and item != "aotr.rar":
-                                    shutil.move(item_path, os.path.join(realms_folder, item))
-                                elif os.path.isdir(item_path) and item != "realms":
-                                    shutil.move(item_path, os.path.join(realms_folder, item))
-                    _status(on_status, "Successfully extracted existing AOTR RAR file", "green")
-                except Exception as extract_error:
-                    print(f"Failed to extract existing RAR file: {extract_error}")
-                    _status(on_status, "Failed to extract existing RAR file, continuing...", "orange")
-                    aotr_updated = False
-                    aotr_rar_path = None
+        # If AOTR base changed for an existing install, treat as fresh install
+        if aotr_base_changed:
+            _status(
+                on_status,
+                f"AOTR base version changed ({local_aotr_version} -> {required_aotr}). Reinstalling...",
+                "blue",
+            )
+            # Remove existing realms folder for a clean install
+            if os.path.exists(realms_folder):
+                shutil.rmtree(realms_folder)
+            is_fresh_install = True
 
-        if not aotr_rar_path and os.path.exists(existing_rar_path):
-            aotr_rar_path = existing_rar_path
-            print(f"Found existing AOTR RAR file: {existing_rar_path}")
-
-        realms_folder = os.path.join(install_path, "realms")
-        if aotr_rar_path and os.path.exists(aotr_rar_path) and (not os.path.exists(realms_folder) or not os.path.isdir(realms_folder)):
-            _status(on_status, "Attempting to extract existing AOTR RAR file...", "blue")
-            try:
-                with rarfile.RarFile(aotr_rar_path, "r") as rar_ref:
-                    rar_ref.extractall(install_path)
-                    extracted_aotr = os.path.join(install_path, "aotr")
-                    if os.path.exists(extracted_aotr):
-                        os.rename(extracted_aotr, realms_folder)
-                    else:
-                        os.makedirs(realms_folder, exist_ok=True)
-                        for item in os.listdir(install_path):
-                            item_path = os.path.join(install_path, item)
-                            if os.path.isfile(item_path) and item != "aotr.rar":
-                                shutil.move(item_path, os.path.join(realms_folder, item))
-                            elif os.path.isdir(item_path) and item != "realms":
-                                shutil.move(item_path, os.path.join(realms_folder, item))
-                _status(on_status, "Successfully extracted existing AOTR RAR file", "green")
-                aotr_updated = True
-            except Exception as extract_error:
-                print(f"Failed to extract existing RAR file: {extract_error}")
-                _status(on_status, "Failed to extract existing RAR file, continuing...", "orange")
-
-        # Get remote version for comparison
-        try:
-            remote_version = fetch_remote_version_info().version
-        except Exception:
-            remote_version = "0.0.0"
-
-        version_file = os.path.join(realms_folder, "realms_version.json")
-        is_update = False
-        needs_base_first = False
-        local_version = "not installed"
-
-        if os.path.exists(version_file):
-            try:
-                with open(version_file, "r", encoding="utf-8") as file:
-                    content = file.read().strip()
-                    if content:
-                        local_version = json.loads(content).get("version", "unknown")
-                        is_update = True
-                        if is_lower_version(str(local_version), BASE_MOD_VERSION):
-                            needs_base_first = True
-            except Exception:
-                is_update = False
-        else:
-            needs_base_first = True
-
-        if not os.path.exists(version_file) or needs_base_first:
-            if not aotr_updated:
+        if is_fresh_install:
+            if aotr_versions_match:
+                # --- Lightweight path: copy aotr -> realms, then base + update ---
+                _status(on_status, "Preparing installation from AOTR folder...", "blue")
                 realms_folder = prepare_realms_folder(install_path, on_status=on_status)
 
-        if not os.path.exists(realms_folder) or not os.path.isdir(realms_folder):
-            raise Exception("Realms folder not found. AOTR extraction failed and no fallback available.")
+                # Install base mod
+                _status(on_status, f"Installing base version {BASE_MOD_VERSION}...", "blue")
+                download_and_install_package(
+                    realms_folder,
+                    BASE_MOD_ZIP_URL,
+                    "base mod",
+                    BASE_MOD_VERSION,
+                    on_status=on_status,
+                    on_progress_pct=on_progress_pct,
+                )
+                _write_local_version_info(version_file, BASE_MOD_VERSION, required_aotr)
 
-        if needs_base_first:
-            _status(on_status, f"Installing base version {BASE_MOD_VERSION}...", "blue")
-            download_and_install_package(
-                realms_folder,
-                BASE_MOD_ZIP_URL,
-                "base mod",
-                BASE_MOD_VERSION,
-                on_status=on_status,
-                on_progress_pct=on_progress_pct,
-            )
+                # Install update if available
+                if is_lower_version(BASE_MOD_VERSION, remote_version):
+                    _status(on_status, f"Base installed. Updating to version {remote_version}...", "blue")
+                    download_and_install_package(
+                        realms_folder,
+                        UPDATE_ZIP_URL,
+                        "update",
+                        remote_version,
+                        on_status=on_status,
+                        on_progress_pct=on_progress_pct,
+                    )
+                    _write_local_version_info(version_file, remote_version, required_aotr)
+            else:
+                # --- Full version path: download complete Realms package ---
+                _status(
+                    on_status,
+                    f"AOTR versions differ (required: {required_aotr}, current: {current_aotr}). "
+                    f"Downloading full Realms package...",
+                    "blue",
+                )
+                # Ensure realms folder exists for extraction target
+                os.makedirs(realms_folder, exist_ok=True)
 
-            with open(version_file, "w", encoding="utf-8") as file:
-                json.dump({"version": BASE_MOD_VERSION}, file)
-
-            if is_lower_version(BASE_MOD_VERSION, remote_version):
-                _status(on_status, f"Base version installed. Now updating to version {remote_version}...", "blue")
+                download_and_install_package(
+                    realms_folder,
+                    FULL_MOD_ZIP_URL,
+                    "full version",
+                    remote_version,
+                    on_status=on_status,
+                    on_progress_pct=on_progress_pct,
+                )
+                _write_local_version_info(version_file, remote_version, required_aotr)
+        else:
+            # --- Existing install: apply update overlay ---
+            if is_lower_version(str(local_version), remote_version):
+                _status(on_status, f"Updating from {local_version} to {remote_version}...", "blue")
                 download_and_install_package(
                     realms_folder,
                     UPDATE_ZIP_URL,
@@ -500,32 +373,9 @@ def install_or_update_realms(
                     on_status=on_status,
                     on_progress_pct=on_progress_pct,
                 )
-                with open(version_file, "w", encoding="utf-8") as file:
-                    json.dump({"version": remote_version}, file)
-        else:
-            download_url = UPDATE_ZIP_URL if is_update else BASE_MOD_ZIP_URL
-            version_label = "update" if is_update else "base mod"
-            version_number = remote_version if is_update else BASE_MOD_VERSION
-
-            download_and_install_package(
-                realms_folder,
-                download_url,
-                version_label,
-                version_number,
-                on_status=on_status,
-                on_progress_pct=on_progress_pct,
-            )
-            with open(version_file, "w", encoding="utf-8") as file:
-                json.dump({"version": remote_version if is_update else BASE_MOD_VERSION}, file)
-
-        # Delete AOTR rar after successful realms install
-        if aotr_rar_path and os.path.exists(aotr_rar_path):
-            try:
-                if os.path.exists(realms_folder) and os.path.isdir(realms_folder):
-                    os.remove(aotr_rar_path)
-                    print(f"Deleted AOTR RAR file: {aotr_rar_path}")
-            except Exception as e:
-                print(f"Warning: Could not delete AOTR RAR file: {e}")
+                _write_local_version_info(version_file, remote_version, required_aotr)
+            else:
+                _status(on_status, f"Mod is already up to date ({local_version}).", "green")
 
         _status(on_status, "Mod installed successfully!", "green")
         return InstallResult(

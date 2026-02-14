@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from .app import create_app
-from .util.logging import configure_logging
+from realms_launcher.app import create_app
+from realms_launcher.util.logging import configure_logging
 
 
 def main() -> None:
