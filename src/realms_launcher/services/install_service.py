@@ -67,15 +67,13 @@ def download_and_install_zip(
                 if os.path.isdir(only):
                     src_root = only
 
-        # Copy/overlay into dest_dir
+        # Merge/overlay into dest_dir (preserves existing files not in the zip)
         for item in os.listdir(src_root):
             src_path = os.path.join(src_root, item)
             dst_path = os.path.join(dest_dir, item)
 
             if os.path.isdir(src_path):
-                if os.path.exists(dst_path):
-                    shutil.rmtree(dst_path)
-                shutil.copytree(src_path, dst_path)
+                shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
             else:
                 os.makedirs(os.path.dirname(dst_path), exist_ok=True)
                 shutil.copy2(src_path, dst_path)
