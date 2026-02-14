@@ -85,14 +85,13 @@ def create_top_buttons(self) -> None:
     self.set_custom_cursor(self.folder_button)
     self.folder_button_window = self.bg_canvas.create_window(x_pos, top_y, window=self.folder_button)
     self.after(10, lambda: self.add_button_shadow(self.folder_button_window))
-    x_pos += 150
 
     self.uninstall_button = tk.Button(
         self.bg_canvas, text="Uninstall Mod", command=self.uninstall_mod, state="disabled"
     )
     self.style_button(self.uninstall_button, bg_color="#e74c3c", hover_color="#c0392b")
     self.set_custom_cursor(self.uninstall_button)
-    self.uninstall_button_window = self.bg_canvas.create_window(x_pos, top_y, window=self.uninstall_button)
+    self.uninstall_button_window = self.bg_canvas.create_window(400, top_y, window=self.uninstall_button)
     self.after(10, lambda: self.add_button_shadow(self.uninstall_button_window))
 
     self.hide_uninstall_button()
