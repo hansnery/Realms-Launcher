@@ -19,7 +19,7 @@ FULL_MOD_ZIP_URL = (
 
 # Launcher self-update
 LAUNCHER_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_launcher.zip"  # beta: realms_launcher_beta.zip
-LAUNCHER_VERSION = "1.0.7"
+LAUNCHER_VERSION = "1.1.0"
 
 # Settings storage
 REG_PATH = r"SOFTWARE\REALMS_Launcher"
