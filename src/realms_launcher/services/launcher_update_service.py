@@ -88,6 +88,24 @@ def download_and_stage_zip(
     return staged_dir
 
 
+def _looks_like_game_folder(directory: str) -> bool:
+    """Return True if *directory* contains known game/mod sub-folders.
+
+    This is a safety hatch: if the launcher exe lives directly inside the
+    game installation folder the updater must not overwrite/delete game files.
+    """
+    suspect_names = {"aotr", "realms", "rotwk"}
+    try:
+        children = {
+            e.lower()
+            for e in os.listdir(directory)
+            if os.path.isdir(os.path.join(directory, e))
+        }
+        return bool(children & suspect_names)
+    except Exception:
+        return False
+
+
 def spawn_updater_and_quit(
     *,
     staged_dir: str,
@@ -102,6 +120,14 @@ def spawn_updater_and_quit(
     write_updater_cmd(cmd_path)
 
     target_dir = launcher_dir()
+
+    if _looks_like_game_folder(target_dir):
+        raise RuntimeError(
+            "The launcher appears to be inside the game installation "
+            "folder.  Please move realms_launcher.exe into its own "
+            "directory before updating to avoid deleting game files."
+        )
+
     log_path = os.path.join(tempfile.gettempdir(), "realms_launcher_update.log")
     try:
         with open(log_path, "a", encoding="utf-8") as lf:
@@ -121,8 +147,8 @@ def spawn_updater_and_quit(
 
     relaunch_cwd = target_dir
 
-    cmd_args = [
-        "/c",
+    # Arguments for the updater batch script (without the /c switch).
+    script_args = [
         cmd_path,
         target_dir,
         staged_dir,
@@ -133,30 +159,37 @@ def spawn_updater_and_quit(
         log_path,
     ]
 
+    def _quote_arg(arg: str) -> str:
+        """Wrap a single argument in double-quotes for cmd.exe."""
+        if arg is None:
+            return '""'
+        return '"' + arg.replace('"', '""') + '"'
+
+    # cmd.exe /c has special quoting rules: when the command string after /c
+    # contains multiple quoted tokens, cmd.exe strips the FIRST and LAST
+    # quote characters (MS "Rule 2").  The fix is to wrap the entire command
+    # in an *extra* pair of quotes so those outer quotes are the ones
+    # stripped, leaving the inner quoting intact.
+    # Also, /c must NOT be quoted — cmd.exe may not recognise it as a switch
+    # when it appears as "/c".
+    inner = " ".join(_quote_arg(a) for a in script_args)
+    cmd_line = f'/c "{inner}"'
+
     use_elevated = USE_ELEVATED_UPDATER or (not can_write_to_dir(target_dir))
     if use_elevated:
         if on_status:
             on_status("Requesting Windows permission to update...")
 
-        def _join_cmd_args(args: list[str]) -> str:
-            out: list[str] = []
-            for a in args:
-                if a is None:
-                    continue
-                out.append('"' + a.replace('"', '""') + '"')
-            return " ".join(out)
-
-        arg_string = _join_cmd_args(cmd_args)
         ctypes.windll.shell32.ShellExecuteW(
             None,
             "runas",
             "cmd.exe",
-            arg_string,
+            cmd_line,
             None,
             1,
         )
     else:
-        start_detached(["cmd.exe"] + cmd_args)
+        start_detached(cmd_line)
 
     if on_status:
         on_status("Applying update... The launcher will close and reopen.")

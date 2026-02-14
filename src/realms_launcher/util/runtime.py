@@ -32,7 +32,7 @@ def can_write_to_dir(directory: str) -> bool:
         return False
 
 
-def start_detached(cmd: list[str]) -> None:
+def start_detached(cmd: "str | list[str]") -> None:
     DETACHED_PROCESS = 0x00000008
     CREATE_NEW_PROCESS_GROUP = 0x00000200
     subprocess.Popen(

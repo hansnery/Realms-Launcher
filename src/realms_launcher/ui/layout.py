@@ -97,9 +97,8 @@ def create_top_buttons(self) -> None:
 
     self.hide_uninstall_button()
     self.after(50, self._update_folder_button_position)
-    x_pos += 150
 
-    language_x, language_y = x_pos, top_y - 25
+    language_x, language_y = 680, top_y - 25
     self.bg_canvas.create_text(
         language_x + 2, language_y + 2, text="Language:", fill="#000000", font=("Segoe UI", 9, "bold"), anchor="center"
     )
@@ -111,7 +110,7 @@ def create_top_buttons(self) -> None:
     self.language_dropdown = ttk.Combobox(self.bg_canvas, textvariable=self.language, state="readonly", width=15)
     self.language_dropdown["values"] = ["English", "Portuguese (BR)"]
     self.language_dropdown.current(0)
-    self.bg_canvas.create_window(x_pos, top_y, window=self.language_dropdown)
+    self.bg_canvas.create_window(language_x, top_y, window=self.language_dropdown)
     self.language_dropdown.bind("<<ComboboxSelected>>", self.change_language)
 
 

@@ -7,7 +7,7 @@ def write_updater_ps1(ps1_path: str) -> None:
     """
     PowerShell updater with detailed logging:
       - Waits for main process (PID) to exit
-      - Mirrors staged -> target via robocopy with retries
+      - Copies staged -> target via robocopy with retries
       - Logs every step to LogPath
       - Cleans up staged dir
       - Relaunches the launcher with proper working directory
@@ -103,8 +103,10 @@ function Copy-With-Retry {
                     Write-Log "Unlock wait result = $unlocked"
                 }
                 Write-Log "robocopy try #$i"
-                # /MIR mirror tree, /R:2 /W:0 quick retries, /NFL/NDL quiets file/dir lists
-                robocopy "$src" "$dst" /MIR /R:2 /W:0 /NFL /NDL /NJH /NJS /NP
+                # /E copies all subdirs (incl. empty); NOT /MIR which would
+                # purge files in the target that are absent from the source —
+                # catastrophic when the launcher lives inside the game folder.
+                robocopy "$src" "$dst" /E /R:2 /W:0 /NFL /NDL /NJH /NJS /NP
                 $code = $LASTEXITCODE
                 Write-Log "robocopy exit code = $code"
                 # robocopy: codes 0-7 are success-ish
@@ -201,12 +203,13 @@ def write_updater_cmd(cmd_path: str) -> None:
         ")",
         ":pid_done",
         "",
-        "REM robocopy mirror from staged to target",
+        "REM robocopy copy from staged to target (NOT /MIR — that would",
+        "REM purge unrelated files if the launcher sits inside the game folder)",
         "set tries=0",
         ":copy_try",
         "set /a tries+=1",
         "call :log robocopy try #%tries%",
-        "robocopy \"%StagedDir%\" \"%TargetDir%\" /MIR /R:2 /W:0 /NFL /NDL /NJH /NJS /NP",
+        "robocopy \"%StagedDir%\" \"%TargetDir%\" /E /R:2 /W:0 /NFL /NDL /NJH /NJS /NP",
         "set rc=%errorlevel%",
         "call :log robocopy exit code=%rc%",
         "if %rc% LEQ 7 goto :copy_ok",
