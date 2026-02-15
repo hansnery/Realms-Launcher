@@ -8,6 +8,8 @@ import os
 import shutil
 from collections.abc import Callable
 
+import requests
+
 from ..constants import (
     BASE_MOD_VERSION,
     BASE_MOD_ZIP_URL,
@@ -332,15 +334,21 @@ def install_or_update_realms(
                 # Install update if available
                 if is_lower_version(BASE_MOD_VERSION, remote_version):
                     _status(on_status, f"Base installed. Updating to version {remote_version}...", "blue")
-                    download_and_install_package(
-                        realms_folder,
-                        UPDATE_ZIP_URL,
-                        "update",
-                        remote_version,
-                        on_status=on_status,
-                        on_progress_pct=on_progress_pct,
-                    )
-                    _write_local_version_info(version_file, remote_version, required_aotr)
+                    try:
+                        download_and_install_package(
+                            realms_folder,
+                            UPDATE_ZIP_URL,
+                            "update",
+                            remote_version,
+                            on_status=on_status,
+                            on_progress_pct=on_progress_pct,
+                        )
+                        _write_local_version_info(version_file, remote_version, required_aotr)
+                    except requests.exceptions.HTTPError as e:
+                        if e.response is not None and e.response.status_code == 404:
+                            _status(on_status, "Update package not available on server, skipping.", "blue")
+                        else:
+                            raise
             else:
                 # --- Full version path: download complete Realms package ---
                 _status(
@@ -365,15 +373,21 @@ def install_or_update_realms(
             # --- Existing install: apply update overlay ---
             if is_lower_version(str(local_version), remote_version):
                 _status(on_status, f"Updating from {local_version} to {remote_version}...", "blue")
-                download_and_install_package(
-                    realms_folder,
-                    UPDATE_ZIP_URL,
-                    "update",
-                    remote_version,
-                    on_status=on_status,
-                    on_progress_pct=on_progress_pct,
-                )
-                _write_local_version_info(version_file, remote_version, required_aotr)
+                try:
+                    download_and_install_package(
+                        realms_folder,
+                        UPDATE_ZIP_URL,
+                        "update",
+                        remote_version,
+                        on_status=on_status,
+                        on_progress_pct=on_progress_pct,
+                    )
+                    _write_local_version_info(version_file, remote_version, required_aotr)
+                except requests.exceptions.HTTPError as e:
+                    if e.response is not None and e.response.status_code == 404:
+                        _status(on_status, "Update package not available on server, skipping.", "blue")
+                    else:
+                        raise
             else:
                 _status(on_status, f"Mod is already up to date ({local_version}).", "green")
 
