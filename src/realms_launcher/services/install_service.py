@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import shutil
 from collections.abc import Callable
 from zipfile import ZipFile
@@ -10,6 +11,36 @@ import requests
 
 StatusCallback = Callable[[str], None]
 ProgressCallback = Callable[[int, int], None]  # received, total
+
+
+def _remove_readonly(func, path, _exc_info):
+    """Error handler for shutil.rmtree: clear read-only flag and retry."""
+    try:
+        os.chmod(path, stat.S_IWRITE)
+        func(path)
+    except Exception:
+        pass
+
+
+def robust_rmtree(path: str) -> None:
+    """Remove a directory tree, handling read-only files on Windows."""
+    if os.path.exists(path):
+        shutil.rmtree(path, onerror=_remove_readonly)
+
+
+def _copy2_force(src: str, dst: str, **kwargs) -> str:
+    """Copy src to dst, clearing read-only flag on destination if needed."""
+    if os.path.exists(dst):
+        try:
+            os.chmod(dst, stat.S_IWRITE)
+        except OSError:
+            pass
+    return shutil.copy2(src, dst, **kwargs)
+
+
+def robust_copytree(src: str, dst: str, **kwargs) -> str:
+    """Copy a directory tree, handling read-only destination files."""
+    return shutil.copytree(src, dst, copy_function=_copy2_force, **kwargs)
 
 
 def download_and_install_zip(
@@ -42,8 +73,7 @@ def download_and_install_zip(
     if on_status:
         on_status("Extracting package...")
 
-    if os.path.exists(temp_extract_dir):
-        shutil.rmtree(temp_extract_dir)
+    robust_rmtree(temp_extract_dir)
     os.makedirs(temp_extract_dir, exist_ok=True)
 
     try:
@@ -73,14 +103,13 @@ def download_and_install_zip(
             dst_path = os.path.join(dest_dir, item)
 
             if os.path.isdir(src_path):
-                shutil.copytree(src_path, dst_path, dirs_exist_ok=True)
+                robust_copytree(src_path, dst_path, dirs_exist_ok=True)
             else:
                 os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-                shutil.copy2(src_path, dst_path)
+                _copy2_force(src_path, dst_path)
     finally:
         try:
-            if os.path.exists(temp_extract_dir):
-                shutil.rmtree(temp_extract_dir)
+            robust_rmtree(temp_extract_dir)
         except Exception:
             pass
         try:

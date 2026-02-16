@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
+
+from .install_service import _copy2_force
 
 
 def launch_game(install_path: str) -> None:
@@ -22,7 +23,7 @@ def launch_game(install_path: str) -> None:
     dxvk_dest = os.path.join(rotwk_folder, "dxvk.conf")
     if os.path.exists(dxvk_source):
         try:
-            shutil.copy2(dxvk_source, dxvk_dest)
+            _copy2_force(dxvk_source, dxvk_dest)
         except Exception:
             # Best-effort only
             pass

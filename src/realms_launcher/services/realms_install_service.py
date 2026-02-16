@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import os
-import shutil
 from collections.abc import Callable
 
 import requests
@@ -17,6 +16,7 @@ from ..constants import (
     UPDATE_ZIP_URL,
 )
 from . import install_service
+from .install_service import robust_copytree, robust_rmtree
 from .version_service import fetch_remote_version_info, is_lower_version
 
 
@@ -101,7 +101,7 @@ def delete_specific_folders(
             folder_path = os.path.join(maps_folder, map_folder)
             if os.path.exists(folder_path) and os.path.isdir(folder_path):
                 _status(on_status, f"Cleaning up: Removing {map_folder}...", "blue")
-                shutil.rmtree(folder_path)
+                robust_rmtree(folder_path)
         _status(on_status, "Map cleanup completed successfully.", "green")
     except Exception as e:
         _status(on_status, f"Warning: Map cleanup failed - {str(e)}", "orange")
@@ -169,21 +169,19 @@ def prepare_realms_folder(
             return realms_folder
 
         _status(on_status, f"Invalid realms folder detected: {message}. Removing...", "orange")
-        shutil.rmtree(realms_folder)
+        robust_rmtree(realms_folder)
 
     _status(on_status, "Copying AOTR folder...", "blue")
     try:
-        shutil.copytree(aotr_folder, realms_folder)
+        robust_copytree(aotr_folder, realms_folder)
     except Exception as e:
-        if os.path.exists(realms_folder):
-            shutil.rmtree(realms_folder)
+        robust_rmtree(realms_folder)
         raise Exception(f"Failed to copy AOTR folder: {str(e)}")
 
     _status(on_status, "Verifying copy integrity...", "blue")
     is_valid, message = verify_folder_copy(aotr_folder, realms_folder)
     if not is_valid:
-        if os.path.exists(realms_folder):
-            shutil.rmtree(realms_folder)
+        robust_rmtree(realms_folder)
         raise Exception(f"Copy verification failed: {message}")
 
     _status(on_status, "Realms folder prepared successfully.", "green")
@@ -309,8 +307,7 @@ def install_or_update_realms(
                 "blue",
             )
             # Remove existing realms folder for a clean install
-            if os.path.exists(realms_folder):
-                shutil.rmtree(realms_folder)
+            robust_rmtree(realms_folder)
             is_fresh_install = True
 
         if is_fresh_install:

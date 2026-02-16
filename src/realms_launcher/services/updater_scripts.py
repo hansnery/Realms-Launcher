@@ -146,17 +146,24 @@ try {
     Write-Log "Cleanup exception: $($_.Exception.Message)"
 }
 
-# Relaunch
+# Cleanup stale _MEI* extraction folders left by previous onefile builds
+# (older versions used runtime_tmpdir='.' which extracted next to the exe)
+try {
+    Get-ChildItem -LiteralPath $TargetDir -Directory -Filter '_MEI*' -ErrorAction SilentlyContinue | ForEach-Object {
+        Write-Log "Removing stale extraction folder: $($_.Name)"
+        Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+    }
+} catch {
+    Write-Log "MEI cleanup exception: $($_.Exception.Message)"
+}
+
+# Relaunch — use explorer.exe so the app runs with the normal user token
+# (not elevated).  Elevated processes apply stricter DLL-loading policies
+# that can block python313.dll from the PyInstaller _MEI temp folder.
 if ($ok -and $RelaunchPath) {
     try {
-        Write-Log "Relaunching..."
-        if ($RelaunchCwd) { Set-Location -LiteralPath $RelaunchCwd }
-        if ($RelaunchArgs) {
-            # If path isn't a file, attempt to run it as a command line
-            Start-Process -FilePath $RelaunchPath -ArgumentList $RelaunchArgs -WorkingDirectory $RelaunchCwd
-        } else {
-            Start-Process -FilePath $RelaunchPath -WorkingDirectory $RelaunchCwd
-        }
+        Write-Log "Relaunching (via explorer.exe for de-elevation)..."
+        Start-Process "explorer.exe" -ArgumentList "`"$RelaunchPath`""
     } catch {
         Write-Log "Relaunch exception: $($_.Exception.Message)"
     }
@@ -237,12 +244,18 @@ def write_updater_cmd(cmd_path: str) -> None:
         "  call :log Staged cleaned",
         ")",
         "",
-        "REM relaunch",
+        "REM clean stale _MEI* extraction folders from previous onefile builds",
+        "REM (older versions used runtime_tmpdir='.' which extracted next to the exe)",
+        "for /d %%d in (\"%TargetDir%\\_MEI*\") do (",
+        "  call :log Removing stale extraction folder: %%~nxd",
+        "  rmdir /s /q \"%%d\"",
+        ")",
+        "",
+        "REM relaunch via explorer.exe so the app runs with normal user token",
+        "REM (elevated processes apply stricter DLL-loading policies)",
         "if exist \"%RelaunchPath%\" (",
-        "  call :log Relaunching...",
-        "  if not \"%RelaunchCwd%\"==\"\" pushd \"%RelaunchCwd%\"",
-        "  start \"\" \"%RelaunchPath%\" %RelaunchArgs%",
-        "  if not \"%RelaunchCwd%\"==\"\" popd",
+        "  call :log Relaunching via explorer.exe for de-elevation...",
+        "  C:\\Windows\\explorer.exe \"%RelaunchPath%\"",
         ") else (",
         "  call :log Relaunch skipped (missing path)",
         ")",

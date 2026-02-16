@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import os
 import re
-import shutil
 from tkinter import messagebox
 
 from ...services import game_service, settings_service
+from ...services.install_service import _copy2_force, robust_rmtree
 
 
 class ActionsMixin:
@@ -41,7 +41,7 @@ class ActionsMixin:
             return
 
         try:
-            shutil.copy2(source_file, target_file)
+            _copy2_force(source_file, target_file)
             settings_service.save_language(self.language.get())  # type: ignore[attr-defined]
             messagebox.showinfo("Success", f"Language changed to {self.language.get()}")  # type: ignore[attr-defined]
         except Exception as e:
@@ -124,8 +124,7 @@ class ActionsMixin:
 
         try:
             realms_folder = os.path.join(folder, "realms")
-            if os.path.exists(realms_folder):
-                shutil.rmtree(realms_folder)
+            robust_rmtree(realms_folder)
 
             desktop = os.path.normpath(os.path.join(os.environ["USERPROFILE"], "Desktop"))
             for file in os.listdir(desktop):

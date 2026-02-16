@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
-import shutil
 from zipfile import ZipFile
+
+from .install_service import robust_rmtree
 
 
 def extract_zip(zip_path: str, dest_dir: str) -> None:
@@ -12,7 +13,6 @@ def extract_zip(zip_path: str, dest_dir: str) -> None:
 
 
 def recreate_dir(path: str) -> None:
-    if os.path.exists(path):
-        shutil.rmtree(path)
+    robust_rmtree(path)
     os.makedirs(path, exist_ok=True)
 

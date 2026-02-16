@@ -1,6 +1,7 @@
 """Project-wide constants and configuration flags."""
 
-# If True, the updater will run elevated (UAC prompt) to write into protected locations.
+# If True, the updater will run elevated (UAC prompt)
+# to write into protected locations.
 USE_ELEVATED_UPDATER = True
 
 # Remote metadata
@@ -19,8 +20,7 @@ FULL_MOD_ZIP_URL = (
 
 # Launcher self-update
 LAUNCHER_ZIP_URL = "https://f005.backblazeb2.com/file/RealmsInExile/realms_launcher.zip"  # beta: realms_launcher_beta.zip
-LAUNCHER_VERSION = "1.1.0"
+LAUNCHER_VERSION = "1.1.3"
 
 # Settings storage
 REG_PATH = r"SOFTWARE\REALMS_Launcher"
-

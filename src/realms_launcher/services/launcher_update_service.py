@@ -88,24 +88,6 @@ def download_and_stage_zip(
     return staged_dir
 
 
-def _looks_like_game_folder(directory: str) -> bool:
-    """Return True if *directory* contains known game/mod sub-folders.
-
-    This is a safety hatch: if the launcher exe lives directly inside the
-    game installation folder the updater must not overwrite/delete game files.
-    """
-    suspect_names = {"aotr", "realms", "rotwk"}
-    try:
-        children = {
-            e.lower()
-            for e in os.listdir(directory)
-            if os.path.isdir(os.path.join(directory, e))
-        }
-        return bool(children & suspect_names)
-    except Exception:
-        return False
-
-
 def spawn_updater_and_quit(
     *,
     staged_dir: str,
@@ -120,13 +102,6 @@ def spawn_updater_and_quit(
     write_updater_cmd(cmd_path)
 
     target_dir = launcher_dir()
-
-    if _looks_like_game_folder(target_dir):
-        raise RuntimeError(
-            "The launcher appears to be inside the game installation "
-            "folder.  Please move realms_launcher.exe into its own "
-            "directory before updating to avoid deleting game files."
-        )
 
     log_path = os.path.join(tempfile.gettempdir(), "realms_launcher_update.log")
     try:
